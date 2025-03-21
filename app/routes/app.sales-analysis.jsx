@@ -133,29 +133,32 @@ export default function SalesAnalysis() {
   const [selectedProduct, setSelectedProduct] = useState("");
   
   // Simulate historical sales - in a real app, we would fetch this from the API
-  // This simulates the last 30 days of sales for each product
+  // This uses fixed values instead of random ones to keep data consistent
   const simulateHistoricalSales = (productId) => {
-    // Generate some randomness in sales patterns
-    const baseSales = Math.floor(Math.random() * 5) + 1; // Base sales between 1-5
-    const trend = Math.random() > 0.7 ? 0.1 : Math.random() > 0.5 ? -0.05 : 0; // Some products trend up, some down
-    const seasonality = Math.random() > 0.7; // Some products have seasonal patterns
+    // Fixed values based on product ID to make it deterministic
+    // Convert product ID to a number for consistent patterns
+    const idNumber = parseInt(productId.replace(/\D/g, '')) || 1;
+    const baseSales = (idNumber % 5) + 2; // Base sales between 2-6
+    const hasTrend = (idNumber % 3 === 0);
+    const trendFactor = hasTrend ? 0.1 : 0;
+    const hasSeasonality = (idNumber % 2 === 0);
     
-    // Generate 30 days of sales data
+    // Generate 30 days of sales data with deterministic pattern
     return Array(30).fill(0).map((_, day) => {
       let daySales = baseSales;
       
       // Add trend - sales gradually increase or decrease over time
-      daySales += day * trend;
+      daySales += day * trendFactor;
       
       // Add seasonality - sales spike on weekends
-      if (seasonality && (day % 7 === 5 || day % 7 === 6)) {
+      if (hasSeasonality && (day % 7 === 5 || day % 7 === 6)) {
         daySales *= 1.5;
       }
       
-      // Add randomness
-      daySales += Math.random() * 2 - 1;
+      // Add predictable variation instead of randomness
+      daySales += ((day % 3) - 1);
       
-      return Math.max(0, Math.round(daySales));
+      return Math.max(1, Math.round(daySales));
     });
   };
   
@@ -181,8 +184,9 @@ export default function SalesAnalysis() {
     const variance = historicalSales.reduce((sum, sales) => sum + Math.pow(sales - averageSales, 2), 0) / historicalSales.length;
     const stdDev = Math.sqrt(variance);
     
-    // Determine lead time (simulated)
-    const leadTime = Math.floor(Math.random() * 5) + 3; // 3-7 days
+    // Determine lead time (fixed by product ID instead of random)
+    const idNumber = parseInt(node.id.replace(/\D/g, '')) || 1;
+    const leadTime = 3 + (idNumber % 5); // 3-7 days, but deterministic based on product ID
     
     // Calculate safety stock based on variability and lead time
     // Formula: Safety Stock = Z-score * Standard Deviation * Square Root of Lead Time

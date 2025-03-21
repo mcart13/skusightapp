@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { json } from "@remix-run/node";
 import { useLoaderData, Link } from "@remix-run/react";
 import {
@@ -14,12 +14,78 @@ import {
   Box,
   LegacyStack
 } from "@shopify/polaris";
-import { authenticate } from "../shopify.server";
+import { getSettings, applySettingsToCalculations, subscribeToSettingsChanges } from "../utils/settings";
 
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  // Import server-only modules inside the loader function
+  const { authenticateRoute } = await import("../utils/auth");
   
-  // Query to get products
+  // Use our custom auth utility that handles testingstore
+  const { admin, isTestStore } = await authenticateRoute(request);
+  
+  // If it's a test store, return simulated data
+  if (isTestStore) {
+    // Return simulated product data for testingstore
+    return json({
+      products: {
+        edges: [
+          {
+            node: {
+              id: "gid://shopify/Product/1",
+              title: "Example Snowboard",
+              variants: {
+                edges: [
+                  {
+                    node: {
+                      id: "gid://shopify/ProductVariant/1",
+                      inventoryQuantity: 15,
+                      price: "159.99"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            node: {
+              id: "gid://shopify/Product/2",
+              title: "Winter Jacket",
+              variants: {
+                edges: [
+                  {
+                    node: {
+                      id: "gid://shopify/ProductVariant/2",
+                      inventoryQuantity: 8,
+                      price: "249.99"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            node: {
+              id: "gid://shopify/Product/3",
+              title: "Gift Card",
+              variants: {
+                edges: [
+                  {
+                    node: {
+                      id: "gid://shopify/ProductVariant/3",
+                      inventoryQuantity: 0,
+                      price: "50.00"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    });
+  }
+  
+  // Normal flow for authenticated stores
   const response = await admin.graphql(`
     query {
       products(first: 10) {
@@ -48,15 +114,35 @@ export const loader = async ({ request }) => {
 
 export default function Dashboard() {
   const { products } = useLoaderData();
+  const [appSettings, setAppSettings] = useState(getSettings());
+  
+  // Subscribe to settings changes
+  useEffect(() => {
+    const unsubscribe = subscribeToSettingsChanges((newSettings) => {
+      setAppSettings(newSettings);
+    });
+    
+    return () => {
+      unsubscribe();
+    };
+  }, []);
   
   // Process product data to include inventory health metrics
   const productData = products.edges.map(({ node }) => {
     const variant = node.variants.edges[0]?.node;
     const currentStock = variant?.inventoryQuantity || 0;
     
-    // Simulate sales data and calculate metrics
-    const avgDailySales = Math.random() * 3 + 0.5; // 0.5 to 3.5 units per day
-    const daysOfSupply = currentStock > 0 ? Math.ceil(currentStock / avgDailySales) : 0;
+    // Use deterministic daily sales based on product ID instead of random values
+    const idNumber = parseInt(node.id.replace(/\D/g, '')) || 1;
+    const avgDailySales = 0.5 + (idNumber % 3); // 0.5 to 3.5 units per day, determined by product ID
+    
+    // Use settings to determine inventory status
+    const calculations = applySettingsToCalculations(
+      { inventoryQuantity: currentStock },
+      avgDailySales
+    );
+    
+    const daysOfSupply = calculations.daysUntilStockout;
     
     // Determine inventory status
     let status = "success";
@@ -65,10 +151,13 @@ export default function Dashboard() {
     if (currentStock === 0) {
       status = "critical";
       statusLabel = "Out of Stock";
-    } else if (daysOfSupply < 7) {
+    } else if (currentStock <= calculations.criticalStockLevel) {
+      status = "critical";
+      statusLabel = "Critical Stock";
+    } else if (currentStock <= calculations.lowStockLevel) {
       status = "warning";
       statusLabel = "Low Stock";
-    } else if (daysOfSupply < 14) {
+    } else if (currentStock <= calculations.reorderPoint) {
       status = "attention";
       statusLabel = "Monitor";
     }
@@ -81,7 +170,8 @@ export default function Dashboard() {
       daysOfSupply,
       status,
       statusLabel,
-      price: variant?.price || 0
+      price: variant?.price || 0,
+      calculations
     };
   });
   
@@ -144,9 +234,12 @@ export default function Dashboard() {
                 </div>
               </div>
               
-              <Text>
-                {inventoryHealthCounts.critical + inventoryHealthCounts.warning} products need attention
-              </Text>
+              <div>
+                <Text>{inventoryHealthCounts.critical + inventoryHealthCounts.warning} products need attention</Text>
+                <Text variant="bodySm" color="subdued">
+                  Using lead time of {appSettings.leadTime} days and safety stock of {appSettings.safetyStockDays} days
+                </Text>
+              </div>
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -197,7 +290,7 @@ export default function Dashboard() {
                             <Text variant="bodySm">{product.daysOfSupply} days</Text>
                           </div>
                           <ProgressBar 
-                            progress={Math.min(100, (product.daysOfSupply / 30) * 100)} 
+                            progress={Math.min(100, (product.daysOfSupply / (appSettings.safetyStockDays + appSettings.leadTime)) * 100)} 
                             size="small"
                             color={product.status === 'critical' ? 'critical' : 'warning'}
                           />
@@ -231,15 +324,15 @@ export default function Dashboard() {
                     <div style={{ position: 'relative', height: '32px', background: '#F4F6F8', borderRadius: '3px' }}>
                       {/* Timeline with key markers */}
                       <div style={{ position: 'absolute', left: '25%', top: 0, height: '100%', borderLeft: '1px dashed #637381', paddingLeft: '4px' }}>
-                        <Text variant="bodySm" color="subdued">7d</Text>
+                        <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.25)}d</Text>
                       </div>
                       
                       <div style={{ position: 'absolute', left: '50%', top: 0, height: '100%', borderLeft: '1px dashed #637381', paddingLeft: '4px' }}>
-                        <Text variant="bodySm" color="subdued">14d</Text>
+                        <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.5)}d</Text>
                       </div>
                       
                       <div style={{ position: 'absolute', left: '75%', top: 0, height: '100%', borderLeft: '1px dashed #637381', paddingLeft: '4px' }}>
-                        <Text variant="bodySm" color="subdued">21d</Text>
+                        <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.75)}d</Text>
                       </div>
                       
                       {/* Inventory remaining indicator */}
@@ -249,18 +342,18 @@ export default function Dashboard() {
                           left: 0, 
                           top: '6px',
                           height: '20px', 
-                          width: `${Math.min(100, (product.daysOfSupply / 30) * 100)}%`,
+                          width: `${Math.min(100, (product.daysOfSupply / appSettings.safetyStockDays) * 100)}%`,
                           background: getTimelineColor(product.status),
                           borderRadius: '2px'
                         }}
                       ></div>
                       
                       {/* Stock out indicator */}
-                      {product.daysOfSupply < 30 && (
+                      {product.daysOfSupply < appSettings.safetyStockDays && (
                         <div 
                           style={{ 
                             position: 'absolute', 
-                            left: `${Math.min(100, (product.daysOfSupply / 30) * 100)}%`, 
+                            left: `${Math.min(100, (product.daysOfSupply / appSettings.safetyStockDays) * 100)}%`, 
                             top: 0,
                             height: '32px', 
                             width: '2px',
@@ -268,6 +361,19 @@ export default function Dashboard() {
                           }}
                         ></div>
                       )}
+                      
+                      {/* Reorder point indicator */}
+                      <div 
+                        style={{ 
+                          position: 'absolute', 
+                          left: `${Math.min(100, (product.calculations.reorderPoint / product.currentStock) * 100)}%`, 
+                          top: 0,
+                          height: '32px', 
+                          width: '2px',
+                          background: '#8c6e00',
+                          display: product.calculations.reorderPoint < product.currentStock ? 'block' : 'none'
+                        }}
+                      ></div>
                     </div>
                   </div>
                 ))}

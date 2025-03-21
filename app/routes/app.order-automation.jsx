@@ -136,6 +136,48 @@ export default function OrderAutomation() {
   const [reorderHistoryModalOpen, setReorderHistoryModalOpen] = useState(false);
   const [selectedHistoryOrder, setSelectedHistoryOrder] = useState(null);
   
+  // Load saved state from localStorage on component mount
+  useEffect(() => {
+    // Only run on the client side
+    if (typeof window !== 'undefined') {
+      try {
+        const savedSelected = localStorage.getItem('orderFormSelected');
+        const savedQuantities = localStorage.getItem('orderFormQuantities');
+        
+        if (savedSelected) {
+          setSelected(JSON.parse(savedSelected));
+        }
+        
+        if (savedQuantities) {
+          setQuantities(JSON.parse(savedQuantities));
+        }
+      } catch (error) {
+        console.error('Error loading saved order form:', error);
+      }
+    }
+  }, []);
+  
+  // Save state to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== 'undefined' && selected.length > 0) {
+      localStorage.setItem('orderFormSelected', JSON.stringify(selected));
+    }
+  }, [selected]);
+  
+  useEffect(() => {
+    if (typeof window !== 'undefined' && Object.keys(quantities).length > 0) {
+      localStorage.setItem('orderFormQuantities', JSON.stringify(quantities));
+    }
+  }, [quantities]);
+  
+  // Clear saved state after successful order submission
+  useEffect(() => {
+    if (actionData?.success) {
+      localStorage.removeItem('orderFormSelected');
+      localStorage.removeItem('orderFormQuantities');
+    }
+  }, [actionData]);
+  
   // Calculate optimal reorder quantities and group products by supplier
   const productsBySupplier = {};
   suppliers.forEach(supplier => {
@@ -146,12 +188,13 @@ export default function OrderAutomation() {
   const productData = products.edges.map(({ node }) => {
     const variant = node.variants.edges[0]?.node;
     const currentStock = variant?.inventoryQuantity || 0;
-    const sku = variant?.sku || "";
+    const idNumber = parseInt(node.id.replace(/\D/g, '')) || 1;
+    const sku = variant?.sku || `SKU-${node.title.substring(0, 3).toUpperCase()}-${idNumber.toString().padStart(3, '0')}`;
     const price = variant?.price || 0;
     
-    // Simulate historical sales data and calculate reorder point
-    const avgDailySales = Math.random() * 3 + 0.5; // 0.5 to 3.5 units per day
-    const leadTime = Math.floor(Math.random() * 5) + 3; // 3-7 days
+    // Use deterministic values based on product ID instead of random numbers
+    const avgDailySales = 0.5 + (idNumber % 3); // 0.5 to 3.5 units per day, determined by product ID
+    const leadTime = 3 + (idNumber % 5); // 3-7 days, determined by product ID
     const stdDev = avgDailySales * 0.3; // Assume variability
     const safetyStock = Math.ceil(1.645 * stdDev * Math.sqrt(leadTime));
     const reorderPoint = Math.ceil(avgDailySales * leadTime) + safetyStock;
@@ -272,12 +315,14 @@ export default function OrderAutomation() {
         setReorderHistoryModalOpen(true);
       }}
     >
-      Reorder Same Items
+      Order Details
     </Button>
   ]);
   
   const handleCreateOrder = (supplierId) => {
     const supplier = suppliers.find(s => s.id === supplierId);
+    if (!supplier) return;
+    
     setCurrentSupplier(supplier);
     setOrderModalOpen(true);
   };
@@ -291,6 +336,12 @@ export default function OrderAutomation() {
         sku: p.sku,
         quantity: quantities[p.id] || p.suggestedQuantity
       }));
+    
+    // Don't submit if no products are selected for this supplier
+    if (productsForSupplier.length === 0) {
+      setOrderModalOpen(false);
+      return;
+    }
     
     const formData = new FormData();
     formData.append("supplierEmail", currentSupplier.email);
@@ -322,21 +373,12 @@ export default function OrderAutomation() {
     });
   };
   
-  const handleReorderFromHistory = () => {
-    if (!selectedHistoryOrder) return;
-    
-    const formData = new FormData();
-    formData.append("supplierEmail", selectedHistoryOrder.supplierEmail);
-    formData.append("supplierName", selectedHistoryOrder.supplier);
-    formData.append("products", JSON.stringify(selectedHistoryOrder.products));
-    
-    submit(formData, { method: "post" });
-    setReorderHistoryModalOpen(false);
-  };
-  
   const closeSuccessModal = () => {
     setSuccessModalOpen(false);
-    // Optionally refresh the page to ensure state is clean
+    // Remove saved order form data after successful submission
+    localStorage.removeItem('orderFormSelected');
+    localStorage.removeItem('orderFormQuantities');
+    // Refresh the page to ensure state is clean
     navigate(".", { replace: true });
   };
   
@@ -385,6 +427,17 @@ export default function OrderAutomation() {
                     columnContentTypes={["text", "text", "text", "numeric", "numeric", "numeric", "text", "text"]}
                     headings={["Select", "Product", "SKU", "Current Stock", "Reorder Point", "Order Quantity", "Supplier", "Quick Action"]}
                     rows={rows}
+                    truncate={true}
+                    columnVisibilityData={[
+                      { fixed: true, width: "50px" },
+                      { fixed: false, width: "200px" },
+                      { fixed: false, width: "100px" },
+                      { fixed: false, width: "100px" },
+                      { fixed: false, width: "100px" },
+                      { fixed: false, width: "100px" },
+                      { fixed: false, width: "150px" },
+                      { fixed: true, width: "100px" }
+                    ]}
                   />
                   
                   <Text variant="bodySm">
@@ -397,37 +450,95 @@ export default function OrderAutomation() {
             
             <Layout.Section>
               <Card>
-                <BlockStack gap="400">
+                <BlockStack gap="300">
                   <Text as="h2" variant="headingMd">
-                    Create Purchase Orders
+                    Order Form
                   </Text>
                   
-                  <BlockStack gap="400">
-                    {suppliers.map(supplier => {
-                      const supplierProducts = productsBySupplier[supplier.id]
-                        .filter(p => selected.includes(p.id));
-                      
-                      if (supplierProducts.length === 0) return null;
-                      
-                      return (
-                        <Card key={supplier.id}>
-                          <BlockStack gap="400">
+                  {!selected.length ? (
+                    <div style={{ textAlign: 'center', padding: '12px 0' }}>
+                      <Text color="subdued" variant="bodySm">
+                        Add multiple items that need restocked to place a bulk order
+                      </Text>
+                    </div>
+                  ) : (
+                    <BlockStack gap="300">
+                      {/* Group selected products by supplier */}
+                      {Object.entries(
+                        selected.reduce((acc, productId) => {
+                          const product = reorderNeededProducts.find(p => p.id === productId);
+                          if (!product) return acc;
+                          
+                          if (!acc[product.supplierId]) {
+                            acc[product.supplierId] = {
+                              supplier: suppliers.find(s => s.id === product.supplierId),
+                              products: []
+                            };
+                          }
+                          
+                          acc[product.supplierId].products.push(product);
+                          return acc;
+                        }, {})
+                      ).map(([supplierId, data]) => (
+                        <Card key={supplierId} padding="300">
+                          <BlockStack gap="300">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <Text variant="headingSm">{supplier.name}</Text>
-                              <Button 
-                                primary 
-                                onClick={() => handleCreateOrder(supplier.id)}
-                              >
-                                Create Purchase Order
-                              </Button>
+                              <Text variant="headingSm">{data.supplier?.name || "Unknown Supplier"}</Text>
                             </div>
                             
-                            <Text>{supplierProducts.length} products selected</Text>
+                            <Text variant="bodySm">{data.products.length} products selected</Text>
+                            
+                            {/* Show product list */}
+                            <div style={{ marginTop: '4px' }}>
+                              {data.products.map(product => (
+                                <div key={product.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid #E4E5E7' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <span 
+                                      role="button"
+                                      tabIndex="0"
+                                      onClick={() => {
+                                        setSelected(selected.filter(id => id !== product.id));
+                                      }}
+                                      onKeyPress={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                          setSelected(selected.filter(id => id !== product.id));
+                                        }
+                                      }}
+                                      aria-label="Remove item"
+                                      style={{ 
+                                        color: '#8c9196', 
+                                        fontSize: '14px',
+                                        fontWeight: 'bold',
+                                        cursor: 'pointer',
+                                        padding: '2px 4px',
+                                        borderRadius: '4px',
+                                        transition: 'color 0.2s',
+                                      }}
+                                      onMouseOver={(e) => e.currentTarget.style.color = '#202223'}
+                                      onMouseOut={(e) => e.currentTarget.style.color = '#8c9196'}
+                                    >
+                                      ×
+                                    </span>
+                                    <Text variant="bodySm">{product.title}</Text>
+                                  </div>
+                                  <Text variant="bodySm">Qty: {quantities[product.id] || product.suggestedQuantity}</Text>
+                                </div>
+                              ))}
+                            </div>
+                            
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                              <Button 
+                                primary 
+                                onClick={() => handleCreateOrder(supplierId)}
+                              >
+                                Submit Order
+                              </Button>
+                            </div>
                           </BlockStack>
                         </Card>
-                      );
-                    })}
-                  </BlockStack>
+                      ))}
+                    </BlockStack>
+                  )}
                 </BlockStack>
               </Card>
             </Layout.Section>
@@ -438,14 +549,22 @@ export default function OrderAutomation() {
           <Card>
             <BlockStack gap="400">
               <Text as="h2" variant="headingMd">
-                Recent Purchase Orders
+                Recent Supply Orders
               </Text>
               
               {orderHistory.length > 0 ? (
                 <DataTable
                   columnContentTypes={["text", "text", "numeric", "text", "text"]}
-                  headings={["Order #", "Supplier", "Products", "Date", "Actions"]}
+                  headings={["Order #", "Supplier", "Products", "Date", ""]}
                   rows={historyRows}
+                  truncate={true}
+                  columnVisibilityData={[
+                    { fixed: false, width: "120px" },
+                    { fixed: false, width: "150px" },
+                    { fixed: false, width: "80px" },
+                    { fixed: false, width: "120px" },
+                    { fixed: true, width: "120px" }
+                  ]}
                 />
               ) : (
                 <EmptyState
@@ -464,7 +583,7 @@ export default function OrderAutomation() {
       <Modal
         open={orderModalOpen}
         onClose={() => setOrderModalOpen(false)}
-        title="Confirm Purchase Order"
+        title="Submit Order"
         primaryAction={{
           content: "Submit Order",
           onAction: handleSubmitOrder
@@ -500,27 +619,30 @@ export default function OrderAutomation() {
         </Modal.Section>
       </Modal>
       
-      {/* Reorder from history modal */}
+      {/* Order details modal */}
       <Modal
         open={reorderHistoryModalOpen}
         onClose={() => setReorderHistoryModalOpen(false)}
-        title="Reorder Previous Order"
+        title="Order Details"
         primaryAction={{
-          content: "Confirm Reorder",
-          onAction: handleReorderFromHistory
+          content: "Close",
+          onAction: () => setReorderHistoryModalOpen(false)
         }}
-        secondaryActions={[
-          {
-            content: "Cancel",
-            onAction: () => setReorderHistoryModalOpen(false)
-          }
-        ]}
       >
         <Modal.Section>
           {selectedHistoryOrder && (
             <TextContainer>
-              <Text>You are about to reorder these items from:</Text>
+              <Text>Order placed with:</Text>
               <Text variant="headingMd">{selectedHistoryOrder.supplier}</Text>
+              
+              <div style={{ marginTop: '12px' }}>
+                <Text variant="bodySm">
+                  Order #{selectedHistoryOrder.id}
+                </Text>
+                <Text variant="bodySm">
+                  Order date: {selectedHistoryOrder.date}
+                </Text>
+              </div>
               
               <Divider />
               
@@ -535,7 +657,7 @@ export default function OrderAutomation() {
               
               <div style={{ marginTop: '16px' }}>
                 <Banner status="info">
-                  This will create a new purchase order with the same items and quantities as order {selectedHistoryOrder.id}.
+                  A confirmation email was sent to the supplier when this order was placed.
                 </Banner>
               </div>
             </TextContainer>
@@ -549,7 +671,7 @@ export default function OrderAutomation() {
         onClose={closeSuccessModal}
         title={actionData?.isQuickOrder ? "Quick Order Submitted" : "Order Submitted Successfully"}
         primaryAction={{
-          content: "Continue",
+          content: "Ok",
           onAction: closeSuccessModal
         }}
       >

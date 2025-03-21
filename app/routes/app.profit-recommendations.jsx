@@ -55,8 +55,9 @@ export default function ProfitRecommendations() {
     const currentStock = variant?.inventoryQuantity || 0;
     const price = parseFloat(variant?.price) || 0;
     
-    // Calculate metrics
-    const avgDailySales = Math.random() * 3 + 0.5; // Simulated: 0.5 to 3.5 units per day
+    // Use deterministic daily sales based on product ID instead of random values
+    const idNumber = parseInt(node.id.replace(/\D/g, '')) || 1; 
+    const avgDailySales = 0.5 + (idNumber % 3); // 0.5 to 3.5 units per day, determined by product ID
     const daysOfSupply = currentStock > 0 ? Math.ceil(currentStock / avgDailySales) : 0;
     const stockTurnover = 365 / Math.max(daysOfSupply, 1);
     

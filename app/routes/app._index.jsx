@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigation, useSubmit, Link } from "@remix-run/react";
+import { useLoaderData, Link } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -12,13 +12,84 @@ import {
   Banner,
   Badge
 } from "@shopify/polaris";
-import { authenticate } from "../shopify.server";
+import { getSettings, applySettingsToCalculations, subscribeToSettingsChanges } from "../utils/settings";
 
-export const loader = async ({ request, context }) => {
-  // Use the authenticate helper to get access to the admin API
-  const { admin, session } = await authenticate.admin(request);
+export const loader = async ({ request }) => {
+  // Import server-only modules inside loader function
+  const { authenticateRoute } = await import("../utils/auth");
   
-  // Query to get products with inventory information
+  // Use our custom auth utility that handles testingstore
+  const { admin, session, isTestStore } = await authenticateRoute(request);
+  
+  // If it's a test store, return mock data
+  if (isTestStore) {
+    return json({
+      products: {
+        data: {
+          products: {
+            edges: [
+              {
+                node: {
+                  id: "gid://shopify/Product/1",
+                  title: "Example Snowboard",
+                  variants: {
+                    edges: [
+                      {
+                        node: {
+                          id: "gid://shopify/ProductVariant/1",
+                          inventoryQuantity: 15,
+                          price: "159.99",
+                          sku: "SNOW-001"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                node: {
+                  id: "gid://shopify/Product/2",
+                  title: "Winter Jacket",
+                  variants: {
+                    edges: [
+                      {
+                        node: {
+                          id: "gid://shopify/ProductVariant/2",
+                          inventoryQuantity: 8,
+                          price: "249.99",
+                          sku: "WJ-001"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                node: {
+                  id: "gid://shopify/Product/3",
+                  title: "Gift Card",
+                  variants: {
+                    edges: [
+                      {
+                        node: {
+                          id: "gid://shopify/ProductVariant/3",
+                          inventoryQuantity: 0,
+                          price: "50.00",
+                          sku: "GC-001"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+  }
+  
+  // Normal flow for authenticated stores
   const response = await admin.graphql(`
     query {
       products(first: 10) {
@@ -32,6 +103,7 @@ export const loader = async ({ request, context }) => {
                   id
                   inventoryQuantity
                   price
+                  sku
                 }
               }
             }
@@ -47,13 +119,30 @@ export const loader = async ({ request, context }) => {
 
 export default function Index() {
   const { products } = useLoaderData();
+  const [appSettings, setAppSettings] = useState(getSettings());
   
-  const calculateRecommendation = (currentStock, salesHistory) => {
-    // This is a simplified algorithm - we'll make it more sophisticated later
-    // For now, it just recommends ordering if stock is below 10
-    if (currentStock < 10) {
+  // Subscribe to settings changes
+  useEffect(() => {
+    const unsubscribe = subscribeToSettingsChanges((newSettings) => {
+      setAppSettings(newSettings);
+    });
+    
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+  
+  const calculateRecommendation = (currentStock, dailySales) => {
+    // Use settings-based calculation
+    const calculations = applySettingsToCalculations({inventoryQuantity: currentStock}, dailySales);
+    
+    if (currentStock <= 0) {
+      return "Out of stock";
+    } else if (currentStock <= calculations.criticalStockLevel) {
+      return "Order now";
+    } else if (currentStock <= calculations.lowStockLevel) {
       return "Order soon";
-    } else if (currentStock < 20) {
+    } else if (currentStock <= calculations.reorderPoint) {
       return "Monitor closely";
     } else {
       return "Stock sufficient";
@@ -64,14 +153,19 @@ export default function Index() {
   const rows = products?.data?.products?.edges?.map(({ node }) => {
     const variant = node.variants.edges[0]?.node;
     const currentStock = variant?.inventoryQuantity || 0;
+    // Generate a deterministic SKU if one doesn't exist
+    const idNumber = parseInt(node.id.replace(/\D/g, '')) || 1;
+    const sku = variant?.sku || `SKU-${node.title.substring(0, 3).toUpperCase()}-${idNumber.toString().padStart(3, '0')}`;
     // Simulate sales history (in a real app, we'd fetch this from the API)
     const mockSalesHistory = [5, 3, 7, 4, 6]; // Last 5 days of sales
+    const dailySales = mockSalesHistory.reduce((sum, val) => sum + val, 0) / mockSalesHistory.length;
     
     return [
       node.title,
       currentStock,
       `$${variant?.price || 0}`,
-      calculateRecommendation(currentStock, mockSalesHistory),
+      calculateRecommendation(currentStock, dailySales),
+      sku, // Add SKU to the data
     ];
   }) || [];
   
@@ -105,8 +199,8 @@ export default function Index() {
     
     // Simulate advanced trend detection alerts
     if (rows.length > 0) {
-      // Randomly select a product for demonstration
-      const trendProduct = rows[Math.floor(Math.random() * rows.length)];
+      // Always select the first product instead of a random one
+      const trendProduct = rows[0];
       alerts.push({
         title: `Sales trend detected for ${trendProduct[0]}`,
         status: "info",
@@ -148,7 +242,12 @@ export default function Index() {
           <Link to="/app/order-automation">
             <Button primary>Automated Ordering</Button>
           </Link>
-          <Link to="/app/profit-recommendations">Profit Maxing</Link>
+          <Link to="/app/profit-recommendations">
+            <Button>Profit Maxing</Button>
+          </Link>
+          <Link to="/app/settings">
+            <Button>Settings</Button>
+          </Link>
         </div>
       }
     >
@@ -182,8 +281,11 @@ export default function Index() {
               </Text>
               <BlockStack gap="200">
                 <Text>Total Products: {rows.length}</Text>
-                <Text>Products Needing Attention: {rows.filter(row => row[3] === "Order soon").length}</Text>
+                <Text>Products Needing Attention: {rows.filter(row => row[3] === "Order soon" || row[3] === "Order now").length}</Text>
                 <Text>Last Updated: {new Date().toLocaleString()}</Text>
+                <Text>
+                  Lead Time Setting: {appSettings.leadTime} days | Safety Stock: {appSettings.safetyStockDays} days
+                </Text>
               </BlockStack>
             </BlockStack>
           </Card>
@@ -196,8 +298,8 @@ export default function Index() {
                 Current Inventory Status
               </Text>
               <DataTable
-                columnContentTypes={["text", "numeric", "numeric", "text"]}
-                headings={["Product", "Current Stock", "Price", "Restock Recommendation"]}
+                columnContentTypes={["text", "numeric", "numeric", "text", "text"]}
+                headings={["Product", "Current Stock", "Price", "Restock Recommendation", "SKU"]}
                 rows={rows}
               />
             </BlockStack>
@@ -219,9 +321,12 @@ export default function Index() {
                   if (row[1] === 0) {
                     status = "critical";
                     label = "Out of Stock";
+                  } else if (row[3] === "Order now") {
+                    status = "critical";
+                    label = "Reorder Now";
                   } else if (row[3] === "Order soon") {
                     status = "warning";
-                    label = "Reorder Now";
+                    label = "Reorder Soon";
                   } else if (row[3] === "Monitor closely") {
                     status = "attention";
                     label = "Monitor";
