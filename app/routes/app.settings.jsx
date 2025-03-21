@@ -21,9 +21,9 @@ import {
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   
-  // Default values instead of database query
+  // Default values
   const settings = {
     leadTime: 7,
     notificationPreferences: ["email"],
@@ -40,18 +40,28 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   
-  // Log settings instead of saving to database
-  console.log("Settings saved:", {
-    shop: session.shop,
-    leadTime: formData.get("leadTime"),
+  // Process form data
+  const settings = {
+    leadTime: parseInt(formData.get("leadTime") || "7", 10),
     notificationPreferences: formData.getAll("notificationPreferences"),
-    advancedEnabled: formData.get("advancedEnabled"),
-  });
+    advancedEnabled: formData.get("advancedEnabled") === "true",
+    safetyStockDays: parseInt(formData.get("safetyStockDays") || "14", 10),
+    serviceLevelPercent: parseInt(formData.get("serviceLevelPercent") || "95", 10),
+    lowStockThreshold: parseInt(formData.get("lowStockThreshold") || "7", 10),
+    criticalStockThreshold: parseInt(formData.get("criticalStockThreshold") || "3", 10),
+    forecastDays: parseInt(formData.get("forecastDays") || "30", 10),
+    restockStrategy: formData.get("restockStrategy") || "economic",
+  };
   
-  return json({ success: true, timestamp: new Date().toLocaleString() });
+  // Simulating saving settings
+  return json({ 
+    settings, 
+    success: true,
+    timestamp: new Date().toLocaleString()
+  });
 };
 
 export default function Settings() {

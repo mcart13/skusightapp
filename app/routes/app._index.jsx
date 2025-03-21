@@ -148,6 +148,7 @@ export default function Index() {
           <Link to="/app/order-automation">
             <Button primary>Automated Ordering</Button>
           </Link>
+          <Link to="/app/profit-recommendations">Profit Maxing</Link>
         </div>
       }
     >

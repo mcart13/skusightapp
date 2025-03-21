@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { json } from "@remix-run/node";
-import { useActionData, useLoaderData, useSubmit, Link } from "@remix-run/react";
+import { useActionData, useLoaderData, useSubmit, Link, useNavigate } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -15,7 +15,10 @@ import {
   TextContainer,
   List,
   Divider,
-  Checkbox
+  Checkbox,
+  Icon,
+  Badge,
+  EmptyState
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 
@@ -65,9 +68,34 @@ export const loader = async ({ request }) => {
     }
   ];
 
+  // In a real app, we would fetch order history from a database
+  // For demo purposes, we'll simulate order history
+  const orderHistory = [
+    {
+      id: "ORD-764291",
+      supplier: "Global Supply Co.",
+      supplierEmail: "orders@globalsupply.example",
+      date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+      products: [
+        { id: "gid://shopify/Product/1", title: "Complete Snowboard", sku: "SB-COMP-001", quantity: 10 },
+        { id: "gid://shopify/Product/2", title: "Snowboard Boots", sku: "SB-BOOT-001", quantity: 8 }
+      ]
+    },
+    {
+      id: "ORD-512396",
+      supplier: "Premium Materials Inc.",
+      supplierEmail: "orders@premiummaterials.example",
+      date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+      products: [
+        { id: "gid://shopify/Product/3", title: "Gift Card", sku: "GC-001", quantity: 20 }
+      ]
+    }
+  ];
+
   return json({ 
     products: responseJson.data.products,
-    suppliers
+    suppliers,
+    orderHistory
   });
 };
 
@@ -78,6 +106,7 @@ export const action = async ({ request }) => {
   const supplierEmail = formData.get("supplierEmail");
   const supplierName = formData.get("supplierName");
   const products = JSON.parse(formData.get("products"));
+  const isQuickOrder = formData.get("quickOrder") === "true";
   
   // In a real app, you would send an actual email to the supplier
   // For demo purposes, we'll simulate a successful order submission
@@ -86,14 +115,17 @@ export const action = async ({ request }) => {
     success: true,
     orderNumber: "ORD-" + Math.floor(Math.random() * 1000000),
     supplier: supplierName,
-    products
+    timestamp: new Date().toLocaleString(),
+    products,
+    isQuickOrder
   });
 };
 
 export default function OrderAutomation() {
-  const { products, suppliers } = useLoaderData();
+  const { products, suppliers, orderHistory } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
+  const navigate = useNavigate();
   
   const [selected, setSelected] = useState([]);
   const [quantities, setQuantities] = useState({});
@@ -101,6 +133,8 @@ export default function OrderAutomation() {
   const [currentSupplier, setCurrentSupplier] = useState(null);
   const [successModalOpen, setSuccessModalOpen] = useState(false);
   const [initialQuantitiesSet, setInitialQuantitiesSet] = useState(false);
+  const [reorderHistoryModalOpen, setReorderHistoryModalOpen] = useState(false);
+  const [selectedHistoryOrder, setSelectedHistoryOrder] = useState(null);
   
   // Calculate optimal reorder quantities and group products by supplier
   const productsBySupplier = {};
@@ -216,7 +250,30 @@ export default function OrderAutomation() {
       }}
       min={0}
     />,
-    suppliers.find(s => s.id === product.supplierId)?.name || "Unknown"
+    suppliers.find(s => s.id === product.supplierId)?.name || "Unknown",
+    <Button 
+      size="slim"
+      onClick={() => handleQuickOrder(product)}
+    >
+      Quick Order
+    </Button>
+  ]);
+  
+  // Create rows for order history
+  const historyRows = orderHistory.map(order => [
+    order.id,
+    order.supplier,
+    order.products.length.toString(),
+    order.date,
+    <Button 
+      size="slim"
+      onClick={() => {
+        setSelectedHistoryOrder(order);
+        setReorderHistoryModalOpen(true);
+      }}
+    >
+      Reorder Same Items
+    </Button>
   ]);
   
   const handleCreateOrder = (supplierId) => {
@@ -242,6 +299,45 @@ export default function OrderAutomation() {
     
     submit(formData, { method: "post" });
     setOrderModalOpen(false);
+  };
+  
+  const handleQuickOrder = (product) => {
+    const supplier = suppliers.find(s => s.id === product.supplierId);
+    
+    const formData = new FormData();
+    formData.append("supplierEmail", supplier?.email || "orders@example.com");
+    formData.append("supplierName", supplier?.name || "Default Supplier");
+    formData.append("products", JSON.stringify([{
+      id: product.id,
+      title: product.title,
+      sku: product.sku,
+      quantity: quantities[product.id] || product.suggestedQuantity
+    }]));
+    formData.append("quickOrder", "true");
+    
+    // Use replace: true to force a full navigation
+    submit(formData, { 
+      method: "post",
+      replace: true
+    });
+  };
+  
+  const handleReorderFromHistory = () => {
+    if (!selectedHistoryOrder) return;
+    
+    const formData = new FormData();
+    formData.append("supplierEmail", selectedHistoryOrder.supplierEmail);
+    formData.append("supplierName", selectedHistoryOrder.supplier);
+    formData.append("products", JSON.stringify(selectedHistoryOrder.products));
+    
+    submit(formData, { method: "post" });
+    setReorderHistoryModalOpen(false);
+  };
+  
+  const closeSuccessModal = () => {
+    setSuccessModalOpen(false);
+    // Optionally refresh the page to ensure state is clean
+    navigate(".", { replace: true });
   };
   
   return (
@@ -286,13 +382,14 @@ export default function OrderAutomation() {
                   </Text>
                   
                   <DataTable
-                    columnContentTypes={["text", "text", "text", "numeric", "numeric", "numeric", "text"]}
-                    headings={["Select", "Product", "SKU", "Current Stock", "Reorder Point", "Order Quantity", "Supplier"]}
+                    columnContentTypes={["text", "text", "text", "numeric", "numeric", "numeric", "text", "text"]}
+                    headings={["Select", "Product", "SKU", "Current Stock", "Reorder Point", "Order Quantity", "Supplier", "Quick Action"]}
                     rows={rows}
                   />
                   
                   <Text variant="bodySm">
                     Suggested quantities are calculated based on your sales velocity, lead time, and optimal order size.
+                    Use "Quick Order" to instantly place an order without confirmation.
                   </Text>
                 </BlockStack>
               </Card>
@@ -336,6 +433,31 @@ export default function OrderAutomation() {
             </Layout.Section>
           </>
         )}
+        
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <Text as="h2" variant="headingMd">
+                Recent Purchase Orders
+              </Text>
+              
+              {orderHistory.length > 0 ? (
+                <DataTable
+                  columnContentTypes={["text", "text", "numeric", "text", "text"]}
+                  headings={["Order #", "Supplier", "Products", "Date", "Actions"]}
+                  rows={historyRows}
+                />
+              ) : (
+                <EmptyState
+                  heading="No recent orders"
+                  image=""
+                >
+                  <p>When you place orders, they will appear here for easy reordering.</p>
+                </EmptyState>
+              )}
+            </BlockStack>
+          </Card>
+        </Layout.Section>
       </Layout>
       
       {/* Order confirmation modal */}
@@ -378,27 +500,75 @@ export default function OrderAutomation() {
         </Modal.Section>
       </Modal>
       
+      {/* Reorder from history modal */}
+      <Modal
+        open={reorderHistoryModalOpen}
+        onClose={() => setReorderHistoryModalOpen(false)}
+        title="Reorder Previous Order"
+        primaryAction={{
+          content: "Confirm Reorder",
+          onAction: handleReorderFromHistory
+        }}
+        secondaryActions={[
+          {
+            content: "Cancel",
+            onAction: () => setReorderHistoryModalOpen(false)
+          }
+        ]}
+      >
+        <Modal.Section>
+          {selectedHistoryOrder && (
+            <TextContainer>
+              <Text>You are about to reorder these items from:</Text>
+              <Text variant="headingMd">{selectedHistoryOrder.supplier}</Text>
+              
+              <Divider />
+              
+              <Text variant="headingSm">Order Contents:</Text>
+              <List type="bullet">
+                {selectedHistoryOrder.products.map(p => (
+                  <List.Item key={p.id}>
+                    {p.title} (SKU: {p.sku}) - Quantity: {p.quantity}
+                  </List.Item>
+                ))}
+              </List>
+              
+              <div style={{ marginTop: '16px' }}>
+                <Banner status="info">
+                  This will create a new purchase order with the same items and quantities as order {selectedHistoryOrder.id}.
+                </Banner>
+              </div>
+            </TextContainer>
+          )}
+        </Modal.Section>
+      </Modal>
+      
       {/* Success modal */}
       <Modal
-        open={successModalOpen}
-        onClose={() => setSuccessModalOpen(false)}
-        title="Order Submitted Successfully"
+        open={successModalOpen && actionData !== undefined}
+        onClose={closeSuccessModal}
+        title={actionData?.isQuickOrder ? "Quick Order Submitted" : "Order Submitted Successfully"}
         primaryAction={{
           content: "Continue",
-          onAction: () => setSuccessModalOpen(false)
+          onAction: closeSuccessModal
         }}
       >
         <Modal.Section>
           {actionData && (
             <TextContainer>
               <Banner status="success">
-                Your purchase order has been sent to {actionData.supplier}
+                {actionData.isQuickOrder 
+                  ? `Your quick order has been sent to ${actionData.supplier}` 
+                  : `Your purchase order has been sent to ${actionData.supplier}`}
               </Banner>
               
               <div style={{ marginTop: '12px' }}>
                 <Text>Order number: {actionData.orderNumber}</Text>
                 <Text variant="bodySm">
-                  {actionData.products.length} products ordered
+                  {actionData.products.length} {actionData.products.length === 1 ? 'product' : 'products'} ordered
+                </Text>
+                <Text variant="bodySm">
+                  Order date: {actionData.timestamp}
                 </Text>
               </div>
               
