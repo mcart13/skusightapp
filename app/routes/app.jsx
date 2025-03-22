@@ -108,7 +108,13 @@ export default function App() {
     },
     {
       label: "Logs & Monitoring",
-      destination: buildUrl('/app/logs')
+      destination: buildUrl('/app/logsview'),
+      subNavigationItems: [
+        {
+          destination: buildUrl('/app/logsview'),
+          label: 'View Logs',
+        }
+      ]
     },
     {
       label: "Settings",
@@ -126,7 +132,7 @@ export default function App() {
               <Card.Section>
                 <EmptyState
                   heading="Authentication Error"
-                  image=""
+                  image={null}
                 >
                   <p>{userError}</p>
                   <Button url="/" primary>Return to Login</Button>

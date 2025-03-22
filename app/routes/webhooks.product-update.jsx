@@ -2,6 +2,8 @@ import { authenticate } from "../shopify.server";
 import { processProductsAutomatic } from "../services/auto-tagging.server";
 import db from "../db.server";
 import { logWebhook, LogLevel } from "../services/logging.server.js";
+import { sendAlert, AlertLevel, monitorPerformance, PerformanceThresholds } from "../services/alerting.server.js";
+import { deleteCachePattern } from "../utils/redis.server.js";
 
 /**
  * This webhook listens for product updates and triggers AI tagging 
@@ -66,30 +68,137 @@ export const action = async ({ request }) => {
         }
       });
       
+      // Send an alert for the missing product ID
+      await sendAlert({
+        message: "Product update webhook missing product ID",
+        level: AlertLevel.WARNING,
+        source: "webhooks.product-update",
+        shop,
+        error,
+        metadata: {
+          webhookId,
+          payload: JSON.stringify(payload)
+        }
+      });
+      
       return new Response();
     }
     
-    // Queue the tagging job for background processing
-    await queueTaggingJob(shop, admin, productId, webhookId, payload);
+    // Clear cache for affected product
+    try {
+      await deleteCachePattern(`products:*`);
+      await deleteCachePattern(`metrics:*${productId}*`);
+      
+      await logWebhook({
+        shop,
+        webhookType: "product-update",
+        message: `Cache cleared for product ${productId}`,
+        status: "info",
+        metadata: {
+          webhookId,
+          productId,
+          processingTime: Date.now() - startTime
+        }
+      });
+    } catch (cacheError) {
+      await logWebhook({
+        shop,
+        webhookType: "product-update",
+        message: `Error clearing cache: ${cacheError.message}`,
+        status: "warning",
+        error: cacheError,
+        metadata: {
+          webhookId,
+          productId,
+          processingTime: Date.now() - startTime
+        }
+      });
+    }
     
-    // Log successful webhook completion
-    await logWebhook({
-      shop,
-      webhookType: "product-update",
-      message: `Product update webhook processed successfully for product ${productId}`,
-      status: "processed",
-      payload,
-      metadata: {
-        webhookId,
-        productId,
-        startTime,
-        processingTime: Date.now() - startTime
+    // Queue the tagging job for background processing
+    try {
+      await queueTaggingJob(shop, admin, productId, webhookId, payload);
+      
+      // Check processing time for performance monitoring
+      const processingTime = Date.now() - startTime;
+      if (processingTime > PerformanceThresholds.WEBHOOK_PROCESSING) {
+        await sendAlert({
+          message: `Slow webhook processing detected: ${processingTime}ms`,
+          level: AlertLevel.WARNING,
+          source: "webhooks.product-update",
+          shop,
+          metadata: {
+            webhookId,
+            productId,
+            processingTime,
+            threshold: PerformanceThresholds.WEBHOOK_PROCESSING
+          }
+        });
       }
-    });
+      
+      // Log successful webhook completion
+      await logWebhook({
+        shop,
+        webhookType: "product-update",
+        message: `Product update webhook processed successfully for product ${productId}`,
+        status: "processed",
+        payload,
+        metadata: {
+          webhookId,
+          productId,
+          startTime,
+          processingTime
+        }
+      });
+    } catch (queueError) {
+      // Handle specific queue errors
+      await sendAlert({
+        message: `Error queueing tagging job: ${queueError.message}`,
+        level: AlertLevel.ERROR,
+        source: "webhooks.product-update",
+        shop,
+        error: queueError,
+        metadata: {
+          webhookId,
+          productId,
+          processingTime: Date.now() - startTime
+        }
+      });
+      
+      // Log the error
+      await logWebhook({
+        shop,
+        webhookType: "product-update",
+        message: `Error queueing tagging job: ${queueError.message}`,
+        status: "error",
+        payload,
+        error: queueError,
+        metadata: {
+          webhookId,
+          productId,
+          processingTime: Date.now() - startTime
+        }
+      });
+    }
     
     // Always return a 200 response quickly for webhooks
     return new Response();
   } catch (error) {
+    // Calculate total processing time
+    const processingTime = Date.now() - startTime;
+    
+    // Send alert for the error
+    await sendAlert({
+      message: `Critical webhook processing error: ${error.message}`,
+      level: AlertLevel.ERROR,
+      source: "webhooks.product-update",
+      error,
+      metadata: {
+        webhookId,
+        processingTime
+      }
+    });
+    
     // Log the error with the webhook logging function
     await logWebhook({
       webhookType: "product-update",
@@ -99,7 +208,7 @@ export const action = async ({ request }) => {
       metadata: {
         webhookId,
         startTime,
-        processingTime: Date.now() - startTime
+        processingTime
       },
       request
     });
@@ -213,6 +322,20 @@ async function queueTaggingJob(shop, admin, productId, webhookId, payload) {
       }
     });
     
+    // Send an alert
+    await sendAlert({
+      message: `Failed to queue tagging job for product ${productId}`,
+      level: AlertLevel.ERROR,
+      source: "webhooks.product-update.queueTaggingJob",
+      shop,
+      error,
+      metadata: {
+        webhookId,
+        productId,
+        queueTime: Date.now() - queueStartTime
+      }
+    });
+    
     throw error; // Re-throw to let the caller handle it
   }
 }
@@ -220,35 +343,51 @@ async function queueTaggingJob(shop, admin, productId, webhookId, payload) {
 /**
  * Get application settings for the shop
  */
-async function getSettings(shop) {
-  try {
-    // Try to fetch from database
-    const storedSettings = await db.shopSettings.findUnique({
-      where: { shopDomain: shop }
-    });
-    
-    // Return stored settings or defaults
-    return storedSettings || {
-      aiTaggingEnabled: true,
-      aiTaggingOnChange: true,
-      aiTaggingBatchSize: 50
-    };
-  } catch (error) {
-    // Log the error
-    await logWebhook({
-      shop,
-      webhookType: "product-update",
-      message: `Error fetching settings: ${error.message}`,
-      status: "error",
-      error,
-      level: LogLevel.WARNING
-    });
-    
-    // Return defaults if we can't get settings
-    return {
-      aiTaggingEnabled: true,
-      aiTaggingOnChange: true,
-      aiTaggingBatchSize: 50
-    };
+const getSettings = monitorPerformance(
+  async function(shop) {
+    try {
+      // Try to fetch from database
+      const storedSettings = await db.shopSettings.findUnique({
+        where: { shopDomain: shop }
+      });
+      
+      // Return stored settings or defaults
+      return storedSettings || {
+        aiTaggingEnabled: true,
+        aiTaggingOnChange: true,
+        aiTaggingBatchSize: 50
+      };
+    } catch (error) {
+      // Log the error
+      await logWebhook({
+        shop,
+        webhookType: "product-update",
+        message: `Error fetching settings: ${error.message}`,
+        status: "error",
+        error,
+        level: LogLevel.WARNING
+      });
+      
+      // Send an alert
+      await sendAlert({
+        message: `Failed to retrieve shop settings: ${error.message}`,
+        level: AlertLevel.WARNING,
+        source: "webhooks.product-update.getSettings",
+        shop,
+        error
+      });
+      
+      // Return defaults if we can't get settings
+      return {
+        aiTaggingEnabled: true,
+        aiTaggingOnChange: true,
+        aiTaggingBatchSize: 50
+      };
+    }
+  },
+  {
+    name: "getSettings",
+    source: "webhooks.product-update",
+    threshold: PerformanceThresholds.API_REQUEST,
   }
-} 
+); 

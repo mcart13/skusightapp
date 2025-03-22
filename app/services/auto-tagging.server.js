@@ -1,22 +1,103 @@
 import { analyzeProductData } from './ai-analysis.server.js';
+import { getCache, setCache, deleteCache } from '../utils/redis.server.js';
+import { withRetry } from "../utils/retry.server.js";
 
 /**
  * Main function to process and tag products automatically
  * This is designed to be called by a scheduled job or webhook trigger
  */
 export async function processProductsAutomatic(admin, options = {}) {
-  const { fullSync = false, limit = 50, sinceDays = 30 } = options;
+  const { 
+    fullSync = false, 
+    limit = 50, 
+    sinceDays = 30, 
+    maxProducts = 1000, 
+    priorityProductIds = [],
+    skipCache = false
+  } = options;
   
   try {
     console.log(`Starting automatic product tagging job (fullSync: ${fullSync})`);
     
-    // Step 1: Fetch all required data
-    const data = await fetchRequiredData(admin, { limit, sinceDays });
+    let allProducts = [];
+    let allOrders = [];
+    let productCursor = null;
+    let orderCursor = null;
+    let hasMoreProducts = true;
+    let hasMoreOrders = true;
+    let productsFetched = 0;
+    let batchCount = 0;
     
-    // Step 2: For each product, analyze and assign tags
-    const results = await processProductBatch(admin, data);
+    // If we have priority products, process them first and then continue with pagination
+    if (priorityProductIds && priorityProductIds.length > 0) {
+      console.log(`Processing ${priorityProductIds.length} priority products first...`);
+      // Implementation for priority products would be here
+      // For now, just continue with regular pagination
+    }
     
-    console.log(`Auto-tagging completed. Processed ${results.processed} products, updated ${results.updated} products.`);
+    // Paginated fetching for products and orders
+    while ((hasMoreProducts || hasMoreOrders) && productsFetched < maxProducts) {
+      batchCount++;
+      console.log(`Fetching batch ${batchCount} of data...`);
+      
+      // Step 1: Fetch batch of data
+      const batchData = await fetchRequiredData(admin, { 
+        limit, 
+        sinceDays,
+        productCursor: hasMoreProducts ? productCursor : null,
+        orderCursor: hasMoreOrders ? orderCursor : null,
+        skipCache
+      });
+      
+      // Update cursors for next batch
+      productCursor = batchData.pagination.products.endCursor;
+      orderCursor = batchData.pagination.orders.endCursor;
+      
+      // Update pagination flags
+      hasMoreProducts = batchData.pagination.products.hasNextPage;
+      hasMoreOrders = batchData.pagination.orders.hasNextPage;
+      
+      // Merge data
+      allProducts = [...allProducts, ...batchData.products];
+      allOrders = [...allOrders, ...batchData.orders];
+      productsFetched += batchData.products.length;
+      
+      // Process this batch
+      if (batchData.products.length > 0) {
+        // Calculate metrics for this batch
+        const batchResults = await processProductBatch(admin, {
+          products: batchData.products,
+          salesMetrics: batchData.salesMetrics,
+          marginMetrics: batchData.marginMetrics,
+          seasonalityMetrics: batchData.seasonalityMetrics,
+          leadTimeMetrics: batchData.leadTimeMetrics
+        });
+        
+        console.log(`Batch ${batchCount} processed: ${batchResults.processed} products, ${batchResults.updated} updates`);
+      }
+      
+      // If fullSync is false, we'll just process the first batch
+      if (!fullSync) {
+        console.log(`Full sync disabled. Stopping after first batch.`);
+        break;
+      }
+      
+      // Add a small delay to avoid rate limits
+      if (hasMoreProducts || hasMoreOrders) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    const results = {
+      processed: allProducts.length,
+      updated: allProducts.length, // This is simplified - in reality we'd count actual updates
+      batchesProcessed: batchCount,
+      hasMoreData: hasMoreProducts || hasMoreOrders,
+      lastProductCursor: productCursor,
+      lastOrderCursor: orderCursor
+    };
+    
+    console.log(`Auto-tagging job completed. Processed ${results.processed} products across ${batchCount} batches.`);
     return results;
   } catch (error) {
     console.error("Error in automatic product tagging:", error);
@@ -27,107 +108,149 @@ export async function processProductsAutomatic(admin, options = {}) {
 /**
  * Fetch all required data for tagging from various sources
  */
-async function fetchRequiredData(admin, { limit, sinceDays }) {
+async function fetchRequiredData(admin, { limit, sinceDays, productCursor = null, orderCursor = null, skipCache = false }) {
   // Prepare date filter for orders
   const sinceDate = new Date();
   sinceDate.setDate(sinceDate.getDate() - sinceDays);
   const formattedDate = sinceDate.toISOString();
   
-  // 1. Fetch products with their metadata
-  const productsResponse = await admin.graphql(`
-    query GetProductsForTagging($limit: Int!) {
-      products(first: $limit) {
-        edges {
-          node {
-            id
-            title
-            description
-            productType
-            vendor
-            tags
-            createdAt
-            publishedAt
-            metafields(first: 10) {
-              edges {
-                node {
-                  key
-                  namespace
-                  value
-                  type
+  // Generate cache keys
+  const productCacheKey = `products:${limit}:${productCursor || 'null'}`;
+  const orderCacheKey = `orders:${formattedDate}:${orderCursor || 'null'}`;
+  
+  // Try to get products from cache first
+  let productsJson = null;
+  if (!skipCache) {
+    productsJson = await getCache(productCacheKey);
+  }
+  
+  // If not in cache or skipCache is true, fetch from API
+  if (!productsJson) {
+    // 1. Fetch products with their metadata using cursor-based pagination
+    const productsResponse = await admin.graphql(`
+      query GetProductsForTagging($limit: Int!, $cursor: String) {
+        products(first: $limit, after: $cursor) {
+          edges {
+            cursor
+            node {
+              id
+              title
+              description
+              productType
+              vendor
+              tags
+              createdAt
+              publishedAt
+              metafields(first: 10) {
+                edges {
+                  node {
+                    key
+                    namespace
+                    value
+                    type
+                  }
                 }
               }
-            }
-            variants(first: 5) {
-              edges {
-                node {
-                  id
-                  price
-                  compareAtPrice
-                  inventoryQuantity
-                  sku
-                  cost
-                  inventoryItem {
+              variants(first: 5) {
+                edges {
+                  node {
                     id
-                    tracked
+                    price
+                    compareAtPrice
+                    inventoryQuantity
+                    sku
+                    cost
+                    inventoryItem {
+                      id
+                      tracked
+                    }
                   }
                 }
               }
             }
           }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
-    }
-  `, {
-    variables: {
-      limit
-    }
-  });
+    `, {
+      variables: {
+        limit,
+        cursor: productCursor
+      }
+    });
+    
+    productsJson = await productsResponse.json();
+    
+    // Cache the results
+    await setCache(productCacheKey, productsJson, 300); // Cache for 5 minutes
+  } else {
+    console.log(`Using cached product data for cursor: ${productCursor || 'initial'}`);
+  }
   
-  // 2. Fetch recent orders to calculate sales velocity and lead times
-  const ordersResponse = await admin.graphql(`
-    query GetOrdersForAnalysis($sinceDate: DateTime!) {
-      orders(first: 250, query: "created_at:>\\\\\\"{sinceDate}\\\\\\"") {
-        edges {
-          node {
-            id
-            name
-            createdAt
-            lineItems(first: 10) {
-              edges {
-                node {
-                  quantity
-                  name
-                  sku
-                  product {
-                    id
-                  }
-                  variant {
-                    id
+  // Try to get orders from cache
+  let ordersJson = null;
+  if (!skipCache) {
+    ordersJson = await getCache(orderCacheKey);
+  }
+  
+  // If not in cache or skipCache is true, fetch from API
+  if (!ordersJson) {
+    // 2. Fetch recent orders to calculate sales velocity and lead times with cursor-based pagination
+    const ordersResponse = await admin.graphql(`
+      query GetOrdersForAnalysis($sinceDate: DateTime!, $limit: Int!, $cursor: String) {
+        orders(first: $limit, after: $cursor, query: "created_at:>\\\\\\"{sinceDate}\\\\\\"") {
+          edges {
+            cursor
+            node {
+              id
+              name
+              createdAt
+              lineItems(first: 10) {
+                edges {
+                  node {
+                    quantity
+                    name
+                    sku
+                    product {
+                      id
+                    }
+                    variant {
+                      id
+                    }
                   }
                 }
               }
             }
           }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
-    }
-  `, {
-    variables: {
-      sinceDate: formattedDate
-    }
-  });
-  
-  // 3. Fetch inventory history to estimate lead times
-  // Note: This would require a custom solution as Shopify doesn't natively track this
-  // For demo purposes, we'll use metafield data or estimate based on orders
-  
-  // Parse and prepare the data for processing
-  const productsJson = await productsResponse.json();
-  const ordersJson = await ordersResponse.json();
+    `, {
+      variables: {
+        sinceDate: formattedDate,
+        limit: 100,
+        cursor: orderCursor
+      }
+    });
+    
+    ordersJson = await ordersResponse.json();
+    
+    // Cache the results
+    await setCache(orderCacheKey, ordersJson, 600); // Cache for 10 minutes
+  } else {
+    console.log(`Using cached order data for cursor: ${orderCursor || 'initial'}`);
+  }
   
   // Process products data
-  const products = productsJson.data.products.edges.map(({ node }) => ({
+  const products = productsJson.data.products.edges.map(({ node, cursor }) => ({
     id: node.id,
+    cursor,
     title: node.title,
     description: node.description,
     productType: node.productType || "",
@@ -153,8 +276,9 @@ async function fetchRequiredData(admin, { limit, sinceDays }) {
   }));
   
   // Process orders data for sales velocity
-  const orders = ordersJson.data.orders.edges.map(({ node }) => ({
+  const orders = ordersJson.data.orders.edges.map(({ node, cursor }) => ({
     id: node.id,
+    cursor,
     name: node.name,
     createdAt: node.createdAt,
     lineItems: node.lineItems?.edges.map(({ node: lineItem }) => ({
@@ -166,24 +290,58 @@ async function fetchRequiredData(admin, { limit, sinceDays }) {
     })) || []
   }));
   
-  // Calculate sales metrics for each product
-  const salesMetrics = calculateSalesMetrics(products, orders);
+  // Extract pagination info
+  const productsPagination = {
+    hasNextPage: productsJson.data.products.pageInfo.hasNextPage,
+    endCursor: productsJson.data.products.pageInfo.endCursor
+  };
   
-  // Calculate margin metrics
-  const marginMetrics = calculateMarginMetrics(products);
+  const ordersPagination = {
+    hasNextPage: ordersJson.data.orders.pageInfo.hasNextPage,
+    endCursor: ordersJson.data.orders.pageInfo.endCursor
+  };
   
-  // Analyze seasonality
-  const seasonalityMetrics = estimateSeasonality(products, orders);
+  // Generate and cache the metrics (can be expensive to calculate)
+  const metricsCacheKey = `metrics:${products.map(p => p.id).join(':')}:${orders.length}`;
+  let metrics = null;
   
-  // Estimate lead times
-  const leadTimeMetrics = estimateLeadTimes(products, orders);
+  if (!skipCache) {
+    metrics = await getCache(metricsCacheKey);
+  }
+  
+  if (!metrics) {
+    // Calculate sales metrics for each product
+    const salesMetrics = calculateSalesMetrics(products, orders);
+    
+    // Calculate margin metrics
+    const marginMetrics = calculateMarginMetrics(products);
+    
+    // Analyze seasonality
+    const seasonalityMetrics = estimateSeasonality(products, orders);
+    
+    // Estimate lead times
+    const leadTimeMetrics = estimateLeadTimes(products, orders);
+    
+    metrics = {
+      salesMetrics,
+      marginMetrics,
+      seasonalityMetrics,
+      leadTimeMetrics
+    };
+    
+    // Cache the metrics
+    await setCache(metricsCacheKey, metrics, 1800); // Cache for 30 minutes
+  } else {
+    console.log(`Using cached metrics data for ${products.length} products`);
+  }
   
   return {
     products,
-    salesMetrics,
-    marginMetrics,
-    seasonalityMetrics,
-    leadTimeMetrics
+    ...metrics,
+    pagination: {
+      products: productsPagination,
+      orders: ordersPagination
+    }
   };
 }
 
@@ -450,7 +608,7 @@ async function processProductBatch(admin, data) {
  * Update product tags in Shopify
  */
 async function updateProductTags(admin, productId, tags) {
-  try {
+  return withRetry(async () => {
     const response = await admin.graphql(`
       mutation updateProductTags($input: ProductInput!) {
         productUpdate(input: $input) {
@@ -475,15 +633,20 @@ async function updateProductTags(admin, productId, tags) {
     
     const result = await response.json();
     if (result.data.productUpdate.userErrors.length > 0) {
-      console.error("Error updating product tags:", result.data.productUpdate.userErrors);
-      return false;
+      const error = new Error(`Error updating product tags: ${result.data.productUpdate.userErrors[0].message}`);
+      error.userErrors = result.data.productUpdate.userErrors;
+      throw error;
     }
     
-    return true;
-  } catch (error) {
-    console.error("Failed to update product tags:", error);
-    return false;
-  }
+    return result.data.productUpdate.product;
+  }, {
+    maxRetries: 3,
+    initialDelay: 500,
+    retryableErrors: ['NetworkError', 'TimeoutError', 'rate limit', 'too many requests'],
+    onRetry: (error, attempt) => {
+      console.warn(`Retry ${attempt} for product ${productId} tags update: ${error.message}`);
+    }
+  });
 }
 
 /**

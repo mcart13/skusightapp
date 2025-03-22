@@ -1,114 +1,157 @@
 import { useState, useEffect, useRef } from "react";
 import { json } from "@remix-run/node";
 import { useLoaderData, useActionData, useSubmit } from "@remix-run/react";
-import {
-  Page,
-  Layout,
-  Card,
-  Text,
-  BlockStack,
-  Button,
-  Banner,
-  Badge,
-  ProgressBar,
-  List,
-  DataTable,
-  ButtonGroup,
-  EmptyState,
-  Modal,
-  TextContainer,
-} from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
+import { getCache, setCache, deleteCache } from "../utils/redis.server.js";
+import { getCacheStats, clearAllCaches, clearCachePattern } from "../utils/cache-manager.server.js";
 
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const shop = session?.shop;
+  
+  // Check cache first
+  const cacheKey = `system-status:${shop}`;
+  let cachedData = await getCache(cacheKey);
+  
+  // If we have a valid cache, return it
+  if (cachedData) {
+    console.log("Using cached system status data");
+    return json(cachedData);
+  }
+  
+  // Import server-only modules directly in the loader function
+  const { getRecentAlerts } = await import("../services/alerting.server");
+  const { LogLevel } = await import("../services/logging.server");
+  const db = await import("../db.server").then(module => module.default);
   
   // Fetch system status information
-  // In a real app, this would come from a database
-  const lastRun = new Date(Date.now() - 12 * 60 * 60 * 1000).toLocaleString(); // 12 hours ago
-  const nextScheduledRun = new Date(Date.now() + 12 * 60 * 60 * 1000).toLocaleString(); // 12 hours from now
+  const lastRun = new Date(Date.now() - 12 * 60 * 60 * 1000).toLocaleString();
+  const nextScheduledRun = new Date(Date.now() + 12 * 60 * 60 * 1000).toLocaleString();
   
-  // Stats would be real in a production app
+  // Get stats
   const stats = {
     totalProducts: 78,
     productsTagged: 62,
     percentTagged: 79,
     lastRunDuration: "2m 37s",
     totalTags: 287,
-    averageTagsPerProduct: 4.6,
-    seasonalProducts: 18,
-    highVelocityProducts: 14,
-    lowMarginProducts: 21
+    averageTagsPerProduct: 4.6
   };
   
-  // Recent activity would be fetched from a log in production
-  const recentActivity = [
-    {
-      id: "act-001",
-      timestamp: new Date(Date.now() - 12 * 60 * 60 * 1000).toLocaleString(),
-      type: "auto-tagging",
-      status: "success",
-      details: "Tagged 62 products successfully"
-    },
-    {
-      id: "act-002",
-      timestamp: new Date(Date.now() - 36 * 60 * 60 * 1000).toLocaleString(),
-      type: "auto-tagging",
-      status: "success",
-      details: "Tagged 58 products successfully"
-    },
-    {
-      id: "act-003",
-      timestamp: new Date(Date.now() - 60 * 60 * 60 * 1000).toLocaleString(),
-      type: "auto-tagging",
-      status: "warning",
-      details: "Tagged 48 products, 3 products failed due to API limits"
-    }
-  ];
-  
-  return json({ 
-    status: {
-      aiTaggingEnabled: true,
-      scheduledFrequency: "daily",
-      lastRun,
-      nextScheduledRun, 
-      isRunning: false,
-      stats,
-      recentActivity
-    } 
+  // Get recent alerts from the database
+  const recentAlerts = await getRecentAlerts({
+    shop,
+    limit: 5
   });
+  
+  // Get settings
+  const settings = await db.shopSettings.findUnique({
+    where: { shopDomain: shop }
+  }) || {
+    aiTaggingEnabled: true,
+    aiTaggingFrequency: "daily",
+    performanceAlertThreshold: 60000 // 1 minute in ms
+  };
+  
+  // Get cache stats
+  const cacheStats = await getCacheStats();
+  
+  const responseData = { 
+    status: {
+      aiTaggingEnabled: settings.aiTaggingEnabled,
+      lastRun,
+      nextScheduledRun,
+      performanceThreshold: settings.performanceAlertThreshold,
+      stats,
+      cacheStats,
+      recentAlerts: recentAlerts.map(alert => ({
+        id: alert.id,
+        timestamp: new Date(alert.timestamp).toLocaleString(),
+        level: alert.level,
+        message: alert.message,
+        source: alert.source
+      }))
+    } 
+  };
+  
+  // Cache the data for 5 minutes (300 seconds)
+  await setCache(cacheKey, responseData, 300);
+  
+  return json(responseData);
 };
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const shop = session?.shop;
   const formData = await request.formData();
   const action = formData.get("action");
+  const fullSync = formData.get("fullSync") === "true";
+  
+  // Import server-only modules directly in the action function
+  const db = await import("../db.server").then(module => module.default);
   
   switch (action) {
     case "run-now":
-      // In a real app, this would trigger a background job
-      // For this demo, we'll simulate a successful response after a delay
-      return json({
-        success: true,
-        message: "Auto-tagging job started successfully",
-        jobId: "job-" + Math.floor(Math.random() * 1000000)
-      });
+      // Trigger a new tagging job
+      try {
+        // In a real app, this would queue a background job
+        const job = await db.processingJob.create({
+          data: {
+            id: `manual-${Date.now()}`,
+            shopDomain: shop,
+            jobType: "auto-tag-products",
+            status: "queued",
+            payload: JSON.stringify({
+              manualRun: true,
+              fullSync: fullSync,
+              timestamp: Date.now()
+            }),
+            createdAt: new Date()
+          }
+        });
+        
+        // Clear the system status cache since we just triggered a job
+        await deleteCache(`system-status:${shop}`);
+        
+        return json({
+          success: true,
+          message: fullSync 
+            ? "Full auto-tagging job started successfully" 
+            : "Auto-tagging job started successfully",
+          jobId: job.id
+        });
+      } catch (error) {
+        return json({
+          success: false,
+          message: `Failed to start job: ${error.message}`
+        });
+      }
       
-    case "pause-auto-tagging":
-      // In a real app, this would update a setting in the database
-      return json({
-        success: true,
-        message: "Automatic tagging has been paused",
-        newStatus: false
-      });
-      
-    case "resume-auto-tagging":
-      // In a real app, this would update a setting in the database
-      return json({
-        success: true,
-        message: "Automatic tagging has been resumed",
-        newStatus: true
-      });
+    case "clear-cache":
+      // Clear all or specific caches
+      try {
+        const pattern = formData.get("pattern");
+        let result;
+        
+        if (pattern) {
+          result = await clearCachePattern(pattern);
+        } else {
+          result = await clearAllCaches();
+        }
+        
+        // Clear the system status cache
+        await deleteCache(`system-status:${shop}`);
+        
+        return json({
+          success: result.success,
+          message: result.message
+        });
+      } catch (error) {
+        return json({
+          success: false,
+          message: `Failed to clear caches: ${error.message}`
+        });
+      }
       
     default:
       return json({
@@ -122,330 +165,204 @@ export default function SystemStatus() {
   const { status } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
-  
-  // Group related state together to prevent sync issues
-  const [jobState, setJobState] = useState({
-    isRunning: false,
-    progress: 0,
-    jobId: null
-  });
-  
-  const [aiEnabled, setAiEnabled] = useState(status.aiTaggingEnabled);
-  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
-  const [confirmAction, setConfirmAction] = useState("");
-  
-  // Use a ref to track component mount status for cleanup safety
-  const isMounted = useRef(true);
-  
-  // Cleanup on component unmount
-  useEffect(() => {
-    // Set mount status when component mounts
-    isMounted.current = true;
-    
-    // Cleanup when component unmounts
-    return () => {
-      isMounted.current = false;
-    };
-  }, []);
-  
-  // Simulate a running job if user started one
-  useEffect(() => {
-    // Store the interval ID outside the setInterval for proper cleanup
-    let intervalId = null;
-    
-    if (actionData?.success && actionData?.jobId) {
-      // Update state atomically to prevent race conditions
-      setJobState({
-        isRunning: true,
-        progress: 0,
-        jobId: actionData.jobId
-      });
-      
-      intervalId = setInterval(() => {
-        // Only update state if component is still mounted
-        if (isMounted.current) {
-          setJobState(currentState => {
-            const newProgress = currentState.progress + Math.random() * 15;
-            
-            if (newProgress >= 100) {
-              // Clear interval inside setState to avoid race conditions
-              if (intervalId) {
-                clearInterval(intervalId);
-                intervalId = null;
-              }
-              
-              // Use setTimeout only if component is still mounted
-              if (isMounted.current) {
-                setTimeout(() => {
-                  if (isMounted.current) {
-                    setJobState(finishedState => ({
-                      ...finishedState,
-                      isRunning: false
-                    }));
-                  }
-                }, 500);
-              }
-              
-              return {
-                ...currentState,
-                progress: 100
-              };
-            }
-            
-            return {
-              ...currentState,
-              progress: newProgress
-            };
-          });
-        }
-      }, 800);
-    }
-    
-    // Clear interval when component unmounts or dependencies change
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    };
-  }, [actionData]);
-  
-  // Update enabled status if the action changed it
-  useEffect(() => {
-    if (actionData?.success && actionData?.newStatus !== undefined) {
-      setAiEnabled(actionData.newStatus);
-    }
-  }, [actionData]);
+  const [fullSync, setFullSync] = useState(false);
+  const [cachePattern, setCachePattern] = useState("*");
   
   const handleRunNow = () => {
-    // Prevent multiple job runs
-    if (jobState.isRunning) return;
-    
     const formData = new FormData();
     formData.append("action", "run-now");
+    formData.append("fullSync", fullSync.toString());
     submit(formData, { method: "post" });
   };
   
-  const handleConfirmAction = () => {
+  const handleClearCache = (pattern = null) => {
     const formData = new FormData();
-    formData.append("action", confirmAction);
+    formData.append("action", "clear-cache");
+    if (pattern) {
+      formData.append("pattern", pattern);
+    }
     submit(formData, { method: "post" });
-    setConfirmModalOpen(false);
   };
-  
-  const openConfirmModal = (action) => {
-    setConfirmAction(action);
-    setConfirmModalOpen(true);
-  };
-  
-  // Format activity rows for the data table
-  const activityRows = status.recentActivity.map(activity => [
-    activity.timestamp,
-    activity.type === "auto-tagging" ? "AI Tagging" : activity.type,
-    <Badge status={activity.status === "success" ? "success" : "warning"}>
-      {activity.status}
-    </Badge>,
-    activity.details
-  ]);
   
   return (
-    <Page
-      title="System Status"
-      subtitle="Monitor automated tagging and system processes"
-      backAction={{
-        content: 'Dashboard',
-        url: '/app'
-      }}
-    >
-      <Layout>
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text as="h2" variant="headingMd">
-                  Automatic AI Tagging System
-                </Text>
-                <div>
-                  <Badge status={aiEnabled ? "success" : "critical"}>
-                    {aiEnabled ? "Enabled" : "Disabled"}
-                  </Badge>
-                </div>
-              </div>
-              
-              {jobState.isRunning ? (
-                <Banner title="AI tagging system is active" status="info">
-                  <p>The system is currently analyzing and tagging your products.</p>
-                  <div style={{ marginTop: '16px' }}>
-                    <ProgressBar progress={jobState.progress} size="small" />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}>
-                      <Text variant="bodySm">Analyzing products...</Text>
-                      <Text variant="bodySm">{Math.round(jobState.progress)}%</Text>
-                    </div>
-                  </div>
-                </Banner>
-              ) : (
-                <div>
-                  <Text variant="bodyMd">
-                    Next scheduled run: <strong>{status.nextScheduledRun}</strong>
-                  </Text>
-                  <Text variant="bodyMd">
-                    Last run: <strong>{status.lastRun}</strong>
-                  </Text>
-                  <div style={{ marginTop: '16px' }}>
-                    <ButtonGroup>
-                      <Button 
-                        primary 
-                        onClick={handleRunNow}
-                        disabled={jobState.isRunning} // Prevent multiple clicks
-                      >
-                        Run Now
-                      </Button>
-                      {aiEnabled ? (
-                        <Button 
-                          onClick={() => openConfirmModal("pause-auto-tagging")}
-                          disabled={jobState.isRunning} // Disable during job execution
-                        >
-                          Pause Automatic Tagging
-                        </Button>
-                      ) : (
-                        <Button 
-                          onClick={() => openConfirmModal("resume-auto-tagging")}
-                          disabled={jobState.isRunning} // Disable during job execution
-                        >
-                          Resume Automatic Tagging
-                        </Button>
-                      )}
-                    </ButtonGroup>
-                  </div>
-                </div>
-              )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-        
-        <Layout.Section oneHalf>
-          <Card>
-            <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">
-                Tagging Stats
-              </Text>
-              
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div>
-                  <Text variant="headingXl">{status.stats.productsTagged}</Text>
-                  <Text variant="bodySm">Products Tagged</Text>
-                </div>
-                <div>
-                  <Text variant="headingXl">{status.stats.totalTags}</Text>
-                  <Text variant="bodySm">Total Tags Applied</Text>
-                </div>
-                <div>
-                  <Text variant="headingXl">{status.stats.averageTagsPerProduct}</Text>
-                  <Text variant="bodySm">Avg Tags per Product</Text>
-                </div>
-                <div>
-                  <Text variant="headingXl">{status.stats.percentTagged}%</Text>
-                  <Text variant="bodySm">Coverage</Text>
-                </div>
-              </div>
-              
-              <Text variant="headingSm">Identified Product Categories:</Text>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
-                <Badge status="info">Seasonal: {status.stats.seasonalProducts}</Badge>
-                <Badge status="success">High Velocity: {status.stats.highVelocityProducts}</Badge>
-                <Badge status="warning">Low Margin: {status.stats.lowMarginProducts}</Badge>
-              </div>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-        
-        <Layout.Section oneHalf>
-          <Card>
-            <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">
-                How It Works
-              </Text>
-              
-              <Text variant="bodyMd">
-                The AI tagging system automatically:
-              </Text>
-              
-              <List type="number">
-                <List.Item>
-                  Analyzes your product catalog and order history
-                </List.Item>
-                <List.Item>
-                  Detects patterns like seasonality and sales velocity
-                </List.Item>
-                <List.Item>
-                  Applies appropriate tags to your products
-                </List.Item>
-                <List.Item>
-                  Updates forecasts and inventory recommendations accordingly
-                </List.Item>
-              </List>
-              
-              <Text variant="bodyMd">
-                These tags are then used to optimize inventory forecasting, reordering suggestions, and sales predictions.
-              </Text>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-        
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">
-                Recent Activity
-              </Text>
-              
-              {status.recentActivity.length > 0 ? (
-                <DataTable
-                  columnContentTypes={["text", "text", "text", "text"]}
-                  headings={["Time", "Activity", "Status", "Details"]}
-                  rows={activityRows}
-                />
-              ) : (
-                <EmptyState
-                  heading="No recent activity"
-                  image=""
-                >
-                  <p>The system has not run any automatic tagging jobs yet.</p>
-                </EmptyState>
-              )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-      </Layout>
+    <div style={{ padding: "20px" }}>
+      <h1>System Status Dashboard</h1>
       
-      <Modal
-        open={confirmModalOpen}
-        onClose={() => setConfirmModalOpen(false)}
-        title={aiEnabled ? "Pause Automatic Tagging?" : "Resume Automatic Tagging?"}
-        primaryAction={{
-          content: "Confirm",
-          onAction: handleConfirmAction
-        }}
-        secondaryActions={[
-          {
-            content: "Cancel",
-            onAction: () => setConfirmModalOpen(false)
-          }
-        ]}
-      >
-        <Modal.Section>
-          <TextContainer>
-            <p>
-              {aiEnabled 
-                ? "Pausing automatic tagging will stop the system from analyzing and tagging your products. You can still run it manually."
-                : "Resuming automatic tagging will allow the system to regularly analyze and tag your products without manual intervention."}
-            </p>
-            <p>
-              Are you sure you want to {aiEnabled ? "pause" : "resume"} automatic tagging?
-            </p>
-          </TextContainer>
-        </Modal.Section>
-      </Modal>
-    </Page>
+      <div style={{ marginBottom: "30px", padding: "15px", border: "1px solid #ddd", borderRadius: "5px" }}>
+        <h2>System Overview</h2>
+        <p>System Status: {status.aiTaggingEnabled ? "Active" : "Paused"}</p>
+        <p>Last Run: {status.lastRun}</p>
+        <p>Next Scheduled Run: {status.nextScheduledRun}</p>
+        <p>Performance Threshold: {(status.performanceThreshold / 1000).toFixed(0)} seconds</p>
+        
+        <div style={{ display: "flex", alignItems: "center", margin: "10px 0" }}>
+          <input
+            type="checkbox"
+            id="fullSync"
+            checked={fullSync}
+            onChange={(e) => setFullSync(e.target.checked)}
+            style={{ marginRight: "8px" }}
+          />
+          <label htmlFor="fullSync">Full Sync (process all products, may take longer)</label>
+        </div>
+        
+        <button 
+          onClick={handleRunNow}
+          style={{
+            backgroundColor: "#008060",
+            color: "white",
+            border: "none",
+            padding: "8px 16px",
+            borderRadius: "4px",
+            cursor: "pointer",
+            marginTop: "10px"
+          }}
+        >
+          Run Tagging Job Now
+        </button>
+      </div>
+      
+      <div style={{ marginBottom: "30px", padding: "15px", border: "1px solid #ddd", borderRadius: "5px" }}>
+        <h2>Tagging Statistics</h2>
+        <p>Total Products: {status.stats.totalProducts}</p>
+        <p>Products Tagged: {status.stats.productsTagged} ({status.stats.percentTagged}%)</p>
+        <p>Average Tags per Product: {status.stats.averageTagsPerProduct}</p>
+        <p>Last Run Duration: {status.stats.lastRunDuration}</p>
+      </div>
+      
+      {status.cacheStats && (
+        <div style={{ marginBottom: "30px", padding: "15px", border: "1px solid #ddd", borderRadius: "5px" }}>
+          <h2>Cache Status</h2>
+          <p>Status: <span style={{color: status.cacheStats.status === 'connected' ? '#008060' : '#cc0000'}}>{status.cacheStats.status}</span></p>
+          <p>Keys Stored: {status.cacheStats.keyCount}</p>
+          <p>Memory Usage: {status.cacheStats.memoryUsage}</p>
+          <p>Hit Rate: {status.cacheStats.hitRate}%</p>
+          <p>Uptime: {status.cacheStats.uptime} minutes</p>
+          
+          <div style={{ margin: "15px 0", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            <button
+              onClick={() => handleClearCache()}
+              style={{
+                backgroundColor: "#cc0000",
+                color: "white",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                cursor: "pointer"
+              }}
+            >
+              Clear All Caches
+            </button>
+            
+            <button
+              onClick={() => handleClearCache("products:*")}
+              style={{
+                backgroundColor: "#e67700",
+                color: "white",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                cursor: "pointer"
+              }}
+            >
+              Clear Product Cache
+            </button>
+            
+            <button
+              onClick={() => handleClearCache("orders:*")}
+              style={{
+                backgroundColor: "#e67700",
+                color: "white",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                cursor: "pointer"
+              }}
+            >
+              Clear Orders Cache
+            </button>
+            
+            <button
+              onClick={() => handleClearCache("metrics:*")}
+              style={{
+                backgroundColor: "#e67700",
+                color: "white",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                cursor: "pointer"
+              }}
+            >
+              Clear Metrics Cache
+            </button>
+          </div>
+          
+          <div style={{ marginTop: "15px" }}>
+            <p style={{ marginBottom: "5px" }}>Clear cache by pattern:</p>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <input
+                type="text"
+                value={cachePattern}
+                onChange={(e) => setCachePattern(e.target.value)}
+                placeholder="Cache pattern (e.g., products:*)"
+                style={{
+                  padding: "8px",
+                  borderRadius: "4px",
+                  border: "1px solid #ddd",
+                  flex: 1
+                }}
+              />
+              <button
+                onClick={() => handleClearCache(cachePattern)}
+                style={{
+                  backgroundColor: "#666",
+                  color: "white",
+                  border: "none",
+                  padding: "8px 16px",
+                  borderRadius: "4px",
+                  cursor: "pointer"
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <div style={{ padding: "15px", border: "1px solid #ddd", borderRadius: "5px" }}>
+        <h2>Recent Alerts</h2>
+        {status.recentAlerts && status.recentAlerts.length > 0 ? (
+          <ul style={{ listStyleType: "none", padding: 0 }}>
+            {status.recentAlerts.map(alert => (
+              <li key={alert.id} style={{ 
+                padding: "10px", 
+                marginBottom: "10px", 
+                backgroundColor: alert.level === "error" ? "#ffebee" : 
+                                 alert.level === "warning" ? "#fff8e1" : "#e8f5e9",
+                borderRadius: "3px"
+              }}>
+                <p><strong>{alert.timestamp}</strong> - {alert.level.toUpperCase()}</p>
+                <p>{alert.message}</p>
+                <p style={{ fontSize: "0.9em", color: "#777" }}>Source: {alert.source || "System"}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No recent alerts to display.</p>
+        )}
+      </div>
+      
+      {actionData && (
+        <div style={{
+          marginTop: "20px",
+          padding: "10px 15px",
+          backgroundColor: actionData.success ? "#e8f5e9" : "#ffebee",
+          borderRadius: "4px"
+        }}>
+          <p>{actionData.message}</p>
+        </div>
+      )}
+    </div>
   );
 } 

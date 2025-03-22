@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "3735a6407faff0009d87d5f7b41adbb7"
-application_url = "https://hose-quantities-arrived-narrow.trycloudflare.com"
+application_url = "https://glossary-cyprus-solution-treatment.trycloudflare.com"
 embedded = true
 name = "skusight"
 handle = "skusight-1"
@@ -27,9 +27,9 @@ scopes = "write_products"
 
 [auth]
 redirect_urls = [
-  "https://hose-quantities-arrived-narrow.trycloudflare.com/auth/callback",
-  "https://hose-quantities-arrived-narrow.trycloudflare.com/auth/shopify/callback",
-  "https://hose-quantities-arrived-narrow.trycloudflare.com/api/auth/callback"
+  "https://glossary-cyprus-solution-treatment.trycloudflare.com/auth/callback",
+  "https://glossary-cyprus-solution-treatment.trycloudflare.com/auth/shopify/callback",
+  "https://glossary-cyprus-solution-treatment.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

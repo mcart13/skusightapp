@@ -6,6 +6,7 @@
  */
 
 import db from "../db.server";
+import { withRetry } from "../utils/retry.server.js";
 
 // Severity levels
 export const LogLevel = {
@@ -206,7 +207,7 @@ export async function logCronJob({
  * @returns {Promise<Object>} - The saved log entry
  */
 async function saveToDatabase(logEntry) {
-  try {
+  return withRetry(async (attempt) => {
     // Convert metadata to string for storage
     const metadataString = JSON.stringify(logEntry.metadata);
     
@@ -226,11 +227,24 @@ async function saveToDatabase(logEntry) {
     });
     
     return dbLog;
-  } catch (error) {
+  }, {
+    // For logging, we want to retry but not too aggressively
+    maxRetries: 2,
+    initialDelay: 200,
+    // We can retry most db errors except constraint violations
+    retryCondition: (error) => {
+      // Don't retry unique constraint violations
+      return !error.message.includes('Unique constraint');
+    },
+    // If all retries fail, we'll just return null and the log will only go to console
+    onRetry: (error) => {
+      console.error(`Retry saving log to database: ${error.message}`);
+    }
+  }).catch(error => {
     // Don't throw here, just let the caller know there was an issue
-    console.error("Database logging error:", error);
+    console.error("Database logging error after retries:", error);
     return null;
-  }
+  });
 }
 
 /**

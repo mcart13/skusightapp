@@ -307,7 +307,7 @@ export default function Index() {
           <Link to="/app/system-status">
             <Button>System Status</Button>
           </Link>
-          <Link to="/app/logs">
+          <Link to="/app/logsview">
             <Button>Logs & Monitoring</Button>
           </Link>
           <Link to="/app/settings">
