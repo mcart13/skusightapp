@@ -100,25 +100,78 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-  const formData = await request.formData();
-  
-  const supplierEmail = formData.get("supplierEmail");
-  const supplierName = formData.get("supplierName");
-  const products = JSON.parse(formData.get("products"));
-  const isQuickOrder = formData.get("quickOrder") === "true";
-  
-  // In a real app, you would send an actual email to the supplier
-  // For demo purposes, we'll simulate a successful order submission
-  
-  return json({
-    success: true,
-    orderNumber: "ORD-" + Math.floor(Math.random() * 1000000),
-    supplier: supplierName,
-    timestamp: new Date().toLocaleString(),
-    products,
-    isQuickOrder
-  });
+  try {
+    const { admin } = await authenticate.admin(request);
+    const formData = await request.formData();
+    
+    // Validate form data
+    const supplierEmail = formData.get("supplierEmail");
+    const supplierName = formData.get("supplierName");
+    
+    if (!supplierEmail || !supplierName) {
+      return json({
+        success: false,
+        error: "Missing supplier information",
+        message: "Supplier email and name are required"
+      }, { status: 400 });
+    }
+    
+    let products;
+    try {
+      products = JSON.parse(formData.get("products") || "[]");
+      
+      // Validate products data structure
+      if (!Array.isArray(products) || products.length === 0) {
+        return json({
+          success: false,
+          error: "Invalid products data",
+          message: "No products selected for order"
+        }, { status: 400 });
+      }
+      
+      // Validate product quantities
+      const invalidProducts = products.filter(p => 
+        typeof p.quantity !== 'number' || 
+        isNaN(p.quantity) || 
+        p.quantity <= 0
+      );
+      
+      if (invalidProducts.length > 0) {
+        return json({
+          success: false,
+          error: "Invalid quantity",
+          message: "All products must have a valid quantity greater than zero"
+        }, { status: 400 });
+      }
+    } catch (error) {
+      return json({
+        success: false,
+        error: "Invalid products data format",
+        message: "Could not parse product data"
+      }, { status: 400 });
+    }
+    
+    const isQuickOrder = formData.get("quickOrder") === "true";
+    
+    // In a real app, you would send an actual email to the supplier
+    // For demo purposes, we'll simulate a successful order submission
+    
+    return json({
+      success: true,
+      orderNumber: "ORD-" + Math.floor(Math.random() * 1000000),
+      supplier: supplierName,
+      timestamp: new Date().toLocaleString(),
+      products,
+      isQuickOrder
+    });
+  } catch (error) {
+    console.error("Order submission error:", error);
+    return json({
+      success: false,
+      error: "Server error",
+      message: "An unexpected error occurred while processing your order"
+    }, { status: 500 });
+  }
 };
 
 export default function OrderAutomation() {
@@ -135,6 +188,7 @@ export default function OrderAutomation() {
   const [initialQuantitiesSet, setInitialQuantitiesSet] = useState(false);
   const [reorderHistoryModalOpen, setReorderHistoryModalOpen] = useState(false);
   const [selectedHistoryOrder, setSelectedHistoryOrder] = useState(null);
+  const [errors, setErrors] = useState({});
   
   // Load saved state from localStorage on component mount
   useEffect(() => {
@@ -145,11 +199,29 @@ export default function OrderAutomation() {
         const savedQuantities = localStorage.getItem('orderFormQuantities');
         
         if (savedSelected) {
-          setSelected(JSON.parse(savedSelected));
+          try {
+            const parsedSelected = JSON.parse(savedSelected);
+            if (Array.isArray(parsedSelected)) {
+              setSelected(parsedSelected);
+            }
+          } catch (parseError) {
+            console.error('Error parsing saved selections:', parseError);
+            // Clear invalid data
+            localStorage.removeItem('orderFormSelected');
+          }
         }
         
         if (savedQuantities) {
-          setQuantities(JSON.parse(savedQuantities));
+          try {
+            const parsedQuantities = JSON.parse(savedQuantities);
+            if (parsedQuantities && typeof parsedQuantities === 'object') {
+              setQuantities(parsedQuantities);
+            }
+          } catch (parseError) {
+            console.error('Error parsing saved quantities:', parseError);
+            // Clear invalid data
+            localStorage.removeItem('orderFormQuantities');
+          }
         }
       } catch (error) {
         console.error('Error loading saved order form:', error);
@@ -160,21 +232,44 @@ export default function OrderAutomation() {
   // Save state to localStorage whenever it changes
   useEffect(() => {
     if (typeof window !== 'undefined' && selected.length > 0) {
-      localStorage.setItem('orderFormSelected', JSON.stringify(selected));
+      try {
+        localStorage.setItem('orderFormSelected', JSON.stringify(selected));
+      } catch (error) {
+        console.error('Error saving selections to localStorage:', error);
+      }
     }
   }, [selected]);
   
   useEffect(() => {
     if (typeof window !== 'undefined' && Object.keys(quantities).length > 0) {
-      localStorage.setItem('orderFormQuantities', JSON.stringify(quantities));
+      try {
+        localStorage.setItem('orderFormQuantities', JSON.stringify(quantities));
+      } catch (error) {
+        console.error('Error saving quantities to localStorage:', error);
+      }
     }
   }, [quantities]);
   
   // Clear saved state after successful order submission
   useEffect(() => {
     if (actionData?.success) {
-      localStorage.removeItem('orderFormSelected');
-      localStorage.removeItem('orderFormQuantities');
+      try {
+        localStorage.removeItem('orderFormSelected');
+        localStorage.removeItem('orderFormQuantities');
+      } catch (error) {
+        console.error('Error clearing localStorage:', error);
+      }
+    }
+  }, [actionData]);
+  
+  // Show error banner if action returns an error
+  useEffect(() => {
+    if (actionData && !actionData.success) {
+      setErrors({
+        message: actionData.message || "An error occurred during order submission"
+      });
+    } else {
+      setErrors({});
     }
   }, [actionData]);
   
@@ -265,6 +360,12 @@ export default function OrderAutomation() {
   // Only products that need reordering
   const reorderNeededProducts = productData.filter(p => p.needsReorder);
   
+  // Validate a quantity value
+  const validateQuantity = (value) => {
+    const numValue = parseInt(value);
+    return !isNaN(numValue) && numValue > 0 ? numValue : null;
+  };
+  
   // Create rows for the table
   const rows = reorderNeededProducts.map(product => [
     <Checkbox
@@ -286,17 +387,20 @@ export default function OrderAutomation() {
       type="number"
       value={quantities[product.id]?.toString() || product.suggestedQuantity.toString()}
       onChange={(value) => {
+        const validatedValue = validateQuantity(value);
         setQuantities({
           ...quantities,
-          [product.id]: parseInt(value) || 0
+          [product.id]: validatedValue !== null ? validatedValue : 0
         });
       }}
-      min={0}
+      error={quantities[product.id] === 0 ? "Quantity must be greater than 0" : undefined}
+      min={1}
     />,
     suppliers.find(s => s.id === product.supplierId)?.name || "Unknown",
     <Button 
       size="slim"
       onClick={() => handleQuickOrder(product)}
+      disabled={quantities[product.id] === 0}
     >
       Quick Order
     </Button>
@@ -330,54 +434,88 @@ export default function OrderAutomation() {
   const handleSubmitOrder = () => {
     const productsForSupplier = reorderNeededProducts
       .filter(p => selected.includes(p.id) && p.supplierId === currentSupplier.id)
-      .map(p => ({
-        id: p.id,
-        title: p.title,
-        sku: p.sku,
-        quantity: quantities[p.id] || p.suggestedQuantity
-      }));
+      .map(p => {
+        const quantity = quantities[p.id] || p.suggestedQuantity;
+        return {
+          id: p.id,
+          title: p.title,
+          sku: p.sku,
+          quantity: quantity > 0 ? quantity : p.suggestedQuantity
+        };
+      });
     
     // Don't submit if no products are selected for this supplier
     if (productsForSupplier.length === 0) {
       setOrderModalOpen(false);
+      setErrors({ message: "No valid products selected for this supplier" });
       return;
     }
     
-    const formData = new FormData();
-    formData.append("supplierEmail", currentSupplier.email);
-    formData.append("supplierName", currentSupplier.name);
-    formData.append("products", JSON.stringify(productsForSupplier));
+    // Validate all quantities
+    const invalidProducts = productsForSupplier.filter(p => p.quantity <= 0);
+    if (invalidProducts.length > 0) {
+      setErrors({ 
+        message: "All products must have quantities greater than zero",
+        invalidProducts: invalidProducts
+      });
+      return;
+    }
     
-    submit(formData, { method: "post" });
-    setOrderModalOpen(false);
+    try {
+      const formData = new FormData();
+      formData.append("supplierEmail", currentSupplier.email);
+      formData.append("supplierName", currentSupplier.name);
+      formData.append("products", JSON.stringify(productsForSupplier));
+      
+      submit(formData, { method: "post" });
+      setOrderModalOpen(false);
+    } catch (error) {
+      console.error("Error submitting order:", error);
+      setErrors({ message: "Failed to submit order. Please try again." });
+    }
   };
   
   const handleQuickOrder = (product) => {
     const supplier = suppliers.find(s => s.id === product.supplierId);
+    const quantity = quantities[product.id] || product.suggestedQuantity;
     
-    const formData = new FormData();
-    formData.append("supplierEmail", supplier?.email || "orders@example.com");
-    formData.append("supplierName", supplier?.name || "Default Supplier");
-    formData.append("products", JSON.stringify([{
-      id: product.id,
-      title: product.title,
-      sku: product.sku,
-      quantity: quantities[product.id] || product.suggestedQuantity
-    }]));
-    formData.append("quickOrder", "true");
+    // Validate quantity
+    if (quantity <= 0) {
+      setErrors({ message: `Invalid quantity for ${product.title}. Must be greater than zero.` });
+      return;
+    }
     
-    // Use replace: true to force a full navigation
-    submit(formData, { 
-      method: "post",
-      replace: true
-    });
+    try {
+      const formData = new FormData();
+      formData.append("supplierEmail", supplier?.email || "orders@example.com");
+      formData.append("supplierName", supplier?.name || "Default Supplier");
+      formData.append("products", JSON.stringify([{
+        id: product.id,
+        title: product.title,
+        sku: product.sku,
+        quantity: quantity
+      }]));
+      formData.append("quickOrder", "true");
+      
+      submit(formData, { 
+        method: "post",
+        replace: true
+      });
+    } catch (error) {
+      console.error("Error submitting quick order:", error);
+      setErrors({ message: "Failed to submit quick order. Please try again." });
+    }
   };
   
   const closeSuccessModal = () => {
     setSuccessModalOpen(false);
     // Remove saved order form data after successful submission
-    localStorage.removeItem('orderFormSelected');
-    localStorage.removeItem('orderFormQuantities');
+    try {
+      localStorage.removeItem('orderFormSelected');
+      localStorage.removeItem('orderFormQuantities');
+    } catch (error) {
+      console.error('Error clearing localStorage:', error);
+    }
     // Refresh the page to ensure state is clean
     navigate(".", { replace: true });
   };
@@ -387,7 +525,7 @@ export default function OrderAutomation() {
       title="Order Automation" 
       backAction={{
         content: 'Dashboard',
-        url: '/app'
+        onAction: () => navigate("/app")
       }}
       secondaryActions={[
         {
@@ -400,6 +538,14 @@ export default function OrderAutomation() {
         }
       ]}
     >
+      {errors.message && (
+        <div style={{ marginBottom: '16px' }}>
+          <Banner status="critical" onDismiss={() => setErrors({})}>
+            <p>{errors.message}</p>
+          </Banner>
+        </div>
+      )}
+      
       <Layout>
         {reorderNeededProducts.length === 0 ? (
           <Layout.Section>

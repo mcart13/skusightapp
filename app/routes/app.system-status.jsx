@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { json } from "@remix-run/node";
 import { useLoaderData, useActionData, useSubmit } from "@remix-run/react";
 import {
@@ -123,34 +123,91 @@ export default function SystemStatus() {
   const actionData = useActionData();
   const submit = useSubmit();
   
-  const [isRunningJob, setIsRunningJob] = useState(false);
-  const [jobProgress, setJobProgress] = useState(0);
+  // Group related state together to prevent sync issues
+  const [jobState, setJobState] = useState({
+    isRunning: false,
+    progress: 0,
+    jobId: null
+  });
+  
   const [aiEnabled, setAiEnabled] = useState(status.aiTaggingEnabled);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState("");
   
+  // Use a ref to track component mount status for cleanup safety
+  const isMounted = useRef(true);
+  
+  // Cleanup on component unmount
+  useEffect(() => {
+    // Set mount status when component mounts
+    isMounted.current = true;
+    
+    // Cleanup when component unmounts
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+  
   // Simulate a running job if user started one
   useEffect(() => {
+    // Store the interval ID outside the setInterval for proper cleanup
+    let intervalId = null;
+    
     if (actionData?.success && actionData?.jobId) {
-      setIsRunningJob(true);
-      setJobProgress(0);
+      // Update state atomically to prevent race conditions
+      setJobState({
+        isRunning: true,
+        progress: 0,
+        jobId: actionData.jobId
+      });
       
-      const interval = setInterval(() => {
-        setJobProgress(prev => {
-          const newProgress = prev + Math.random() * 15;
-          if (newProgress >= 100) {
-            clearInterval(interval);
-            setTimeout(() => {
-              setIsRunningJob(false);
-            }, 500);
-            return 100;
-          }
-          return newProgress;
-        });
+      intervalId = setInterval(() => {
+        // Only update state if component is still mounted
+        if (isMounted.current) {
+          setJobState(currentState => {
+            const newProgress = currentState.progress + Math.random() * 15;
+            
+            if (newProgress >= 100) {
+              // Clear interval inside setState to avoid race conditions
+              if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+              }
+              
+              // Use setTimeout only if component is still mounted
+              if (isMounted.current) {
+                setTimeout(() => {
+                  if (isMounted.current) {
+                    setJobState(finishedState => ({
+                      ...finishedState,
+                      isRunning: false
+                    }));
+                  }
+                }, 500);
+              }
+              
+              return {
+                ...currentState,
+                progress: 100
+              };
+            }
+            
+            return {
+              ...currentState,
+              progress: newProgress
+            };
+          });
+        }
       }, 800);
-      
-      return () => clearInterval(interval);
     }
+    
+    // Clear interval when component unmounts or dependencies change
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
   }, [actionData]);
   
   // Update enabled status if the action changed it
@@ -161,6 +218,9 @@ export default function SystemStatus() {
   }, [actionData]);
   
   const handleRunNow = () => {
+    // Prevent multiple job runs
+    if (jobState.isRunning) return;
+    
     const formData = new FormData();
     formData.append("action", "run-now");
     submit(formData, { method: "post" });
@@ -212,14 +272,14 @@ export default function SystemStatus() {
                 </div>
               </div>
               
-              {isRunningJob ? (
+              {jobState.isRunning ? (
                 <Banner title="AI tagging system is active" status="info">
                   <p>The system is currently analyzing and tagging your products.</p>
                   <div style={{ marginTop: '16px' }}>
-                    <ProgressBar progress={jobProgress} size="small" />
+                    <ProgressBar progress={jobState.progress} size="small" />
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}>
                       <Text variant="bodySm">Analyzing products...</Text>
-                      <Text variant="bodySm">{Math.round(jobProgress)}%</Text>
+                      <Text variant="bodySm">{Math.round(jobState.progress)}%</Text>
                     </div>
                   </div>
                 </Banner>
@@ -233,15 +293,25 @@ export default function SystemStatus() {
                   </Text>
                   <div style={{ marginTop: '16px' }}>
                     <ButtonGroup>
-                      <Button primary onClick={handleRunNow}>
+                      <Button 
+                        primary 
+                        onClick={handleRunNow}
+                        disabled={jobState.isRunning} // Prevent multiple clicks
+                      >
                         Run Now
                       </Button>
                       {aiEnabled ? (
-                        <Button onClick={() => openConfirmModal("pause-auto-tagging")}>
+                        <Button 
+                          onClick={() => openConfirmModal("pause-auto-tagging")}
+                          disabled={jobState.isRunning} // Disable during job execution
+                        >
                           Pause Automatic Tagging
                         </Button>
                       ) : (
-                        <Button onClick={() => openConfirmModal("resume-auto-tagging")}>
+                        <Button 
+                          onClick={() => openConfirmModal("resume-auto-tagging")}
+                          disabled={jobState.isRunning} // Disable during job execution
+                        >
                           Resume Automatic Tagging
                         </Button>
                       )}

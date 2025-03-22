@@ -178,17 +178,34 @@ export default function Settings() {
       // Reset unsaved changes flag
       setHasUnsavedChanges(false);
       
-      // If there's a pending navigation, execute it
+      // If there's a pending navigation, execute it using Remix's navigate
       if (pendingNavigation) {
         const urlParams = shop && host ? `?shop=${shop}&host=${host}` : '';
-        window.location.href = `${pendingNavigation}${urlParams}`;
+        navigate(`${pendingNavigation}${urlParams}`, { replace: true });
         setPendingNavigation(null);
       }
       
       // Clean up timer if component unmounts
       return () => clearTimeout(timer);
     }
-  }, [actionData, formValues, shop, host, pendingNavigation, isSubmitting]);
+  }, [actionData, formValues, shop, host, pendingNavigation, isSubmitting, navigate]);
+  
+  // Handle beforeunload event to warn about unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      // Only trigger warning if there are unsaved changes AND we're not currently submitting
+      if (hasUnsavedChanges && !isSubmitting) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [hasUnsavedChanges, isSubmitting]);
   
   // Handle form submission
   const handleSubmit = () => {
@@ -229,23 +246,6 @@ export default function Settings() {
     setFormValues({...formValues, ...newValues});
   };
   
-  // Handle beforeunload event to warn about unsaved changes
-  useEffect(() => {
-    const handleBeforeUnload = (e) => {
-      // Only trigger warning if there are unsaved changes AND we're not currently submitting
-      if (hasUnsavedChanges && !isSubmitting) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    };
-    
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [hasUnsavedChanges, isSubmitting]);
-  
   // Handle navigation when there are unsaved changes
   const handleBackNavigation = () => {
     if (hasUnsavedChanges) {
@@ -253,10 +253,9 @@ export default function Settings() {
       setShowNavigationModal(true);
       setPendingNavigation('/app');
     } else {
-      // Always include shop and host parameters when navigating
+      // Use Remix's navigate function instead of direct window.location
       const urlParams = shop && host ? `?shop=${shop}&host=${host}` : '';
-      // Use window.location for direct navigation rather than React Router
-      window.location.href = `/app${urlParams}`;
+      navigate(`/app${urlParams}`);
     }
   };
   
@@ -264,7 +263,7 @@ export default function Settings() {
   const handleConfirmedNavigation = () => {
     if (pendingNavigation) {
       const urlParams = shop && host ? `?shop=${shop}&host=${host}` : '';
-      window.location.href = `${pendingNavigation}${urlParams}`;
+      navigate(`${pendingNavigation}${urlParams}`, { replace: true });
       setPendingNavigation(null);
       setShowNavigationModal(false);
     }
