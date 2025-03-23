@@ -1,0 +1,75 @@
+/* 
+  Shopify Embedded App Performance Optimizations
+  
+  This file contains CSS optimizations for Shopify's embedded App context.
+  Avoiding properties that trigger layout recalculations in iframes.
+*/
+
+/* Prefer transform and opacity for animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* CSS Custom Properties for positioning */
+:root {
+  --animate-fade: fadeIn 0.3s ease-in-out;
+  --animate-slide: slideIn 0.3s ease-in-out;
+  
+  /* Set default positioning methods */
+  --position-method: translateX;
+  --size-method: scaleX;
+}
+
+/* Use will-change sparingly and only where needed */
+.will-change-opacity {
+  will-change: opacity;
+}
+
+.will-change-transform {
+  will-change: transform;
+}
+
+/* Helpers to use animation and transform */
+.fade-in {
+  animation: var(--animate-fade);
+}
+
+.slide-in {
+  animation: var(--animate-slide);
+}
+
+/* Use transform instead of positioning for element placement */
+.transform-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.transform-y-center {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.transform-x-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+} 

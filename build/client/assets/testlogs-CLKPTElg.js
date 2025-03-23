@@ -1,0 +1,1 @@
+import{j as s}from"./index-C_P7ACqV.js";import{u as a}from"./components-CgIgXmEm.js";function o(){const e=a();return s.jsxs("div",{style:{padding:"20px"},children:[s.jsx("h1",{children:"Test Logs Page"}),s.jsx("p",{children:e.message}),s.jsx("a",{href:"/app",children:"Back to app"})]})}export{o as default};

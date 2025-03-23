@@ -1,0 +1,172 @@
+# Cline Rules for SKU Sight
+
+## Project Patterns
+
+### Code Organization
+- Components are organized by feature, not by type
+- Each feature has its own directory with an index.js export
+- CSS modules are used for component-specific styling
+- Shared utilities are in the utils directory
+
+### Naming Conventions
+- React components use PascalCase (e.g., ProductDetail.jsx)
+- CSS module files use ComponentName.module.css pattern
+- Server-side files use kebab-case with .server.js suffix
+- Utility functions use camelCase
+
+### File Structure
+- Routes are defined in app/routes/
+- Components are in app/components/[FeatureName]/
+- Services are in app/services/
+- Utilities are in app/utils/
+- Database schema is in prisma/schema.prisma
+
+## Implementation Patterns
+
+### App Bridge Integration
+- Always use App Bridge for navigation instead of direct links
+- Leverage App Bridge for modals, toasts, and other UI elements
+- Follow Shopify's authentication patterns through App Bridge
+- Use App Bridge context providers at appropriate levels in the component hierarchy
+
+### Data Fetching
+- Use Remix loaders for data fetching
+- Implement caching for frequently accessed data
+- Handle loading states with Suspense when possible
+- Provide fallback UI for error states
+
+### State Management
+- Prefer server-side state management with Remix
+- Use React hooks for local component state
+- Avoid global state management libraries when possible
+- Use URL parameters for shareable state
+
+### Error Handling
+- Implement retry logic for API calls
+- Log errors with context for debugging
+- Provide user-friendly error messages
+- Use try/catch blocks for error boundaries
+
+### Performance Optimization
+- Implement pagination for large datasets
+- Use Redis caching for expensive operations
+- Optimize database queries with proper indexing
+- Lazy load components when appropriate
+
+## Development Workflow
+
+### Local Development
+- Use `npm run dev` for local development
+- Check the Shopify CLI tunnel URL for accessing the app
+- Use SQLite for local database development
+- Test webhooks with the Shopify CLI
+
+### Testing
+- Write unit tests for utility functions
+- Create integration tests for critical paths
+- Test webhook handlers with mock data
+- Verify UI components with React Testing Library
+
+### Deployment
+- Use `npm run deploy` to deploy to Shopify
+- Update environment variables in production
+- Run database migrations before deployment
+- Verify webhook subscriptions after deployment
+
+## User Preferences
+
+### Code Style
+- Use 2 spaces for indentation
+- Prefer arrow functions for component definitions
+- Use destructuring for props
+- Include JSDoc comments for complex functions
+
+### Component Structure
+- Keep components focused on a single responsibility
+- Extract reusable logic to custom hooks
+- Use composition over inheritance
+- Implement proper prop validation
+
+### UI/UX Preferences
+- Follow Shopify Polaris and App Bridge design system
+- Ensure responsive design for all components
+- Provide clear loading and error states
+- Use consistent action patterns across the app
+
+## Critical Implementation Paths
+
+### Authentication Flow
+1. User accesses app through Shopify Admin
+2. App authenticates using Shopify OAuth
+3. Session is stored in database
+4. User is redirected to app home
+
+### Data Synchronization
+1. Webhooks trigger on Shopify data changes
+2. Webhook handlers process the events
+3. Database is updated with new information
+4. Cached data is invalidated as needed
+
+### Analysis Generation
+1. User requests analysis with filters
+2. System checks cache for existing results
+3. If not cached, analysis is performed
+4. Results are cached and returned to user
+
+### Order Automation
+1. User selects products and supplier
+2. Order form is populated with details
+3. User submits order for processing
+4. Order is created and tracked in history
+
+## Known Challenges
+
+### API Rate Limits
+- Implement request batching for bulk operations
+- Use exponential backoff for retries
+- Cache frequently accessed data
+- Schedule non-urgent operations during off-peak times
+
+### Large Data Sets
+- Implement efficient pagination
+- Use database indexing for common queries
+- Consider data aggregation for analytics
+- Optimize frontend rendering for large lists
+
+### Webhook Processing
+- Implement idempotent webhook handlers
+- Use a queue for processing webhooks
+- Monitor webhook processing performance
+- Implement retry logic for failed processing
+
+## Tool Usage Patterns
+
+### Remix Framework
+- Leverage nested routing for feature organization
+- Use resource routes for API endpoints
+- Implement error boundaries for graceful failures
+- Utilize meta functions for SEO optimization
+
+### App Bridge
+- Use App Bridge for all Shopify Admin interactions
+- Implement proper navigation using App Bridge
+- Handle authentication and session management with App Bridge
+- Follow Shopify's guidelines for embedded app development
+
+### Shopify API
+- Prefer GraphQL API for most operations
+- Use REST API for specific endpoints when needed
+- Implement proper error handling for API calls
+- Cache responses when appropriate
+
+### Prisma ORM
+- Define clear models with relationships
+- Use migrations for schema changes
+- Implement efficient queries with select and include
+- Use transactions for related operations
+
+### Redis Cache
+- Use for session storage and data caching
+- Implement appropriate TTL for cached items
+- Use pipeline for batch operations
+- Monitor memory usage and eviction

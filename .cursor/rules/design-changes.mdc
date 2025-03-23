@@ -1,0 +1,14 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+When making any design change, make sure it follows the recommended guidelines in the documentation from app bridge or polaris that I have put the links for below.
+
+You will never design your own elements. They must always come from polaris and app bridge.
+
+https://polaris.shopify.com/
+
+https://shopify.dev/docs/api/app-bridge-library
+
+

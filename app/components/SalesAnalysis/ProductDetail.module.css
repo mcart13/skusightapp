@@ -1,0 +1,11 @@
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.forecastContainer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+} 

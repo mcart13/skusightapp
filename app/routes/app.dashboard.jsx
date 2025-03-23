@@ -10,10 +10,16 @@ import {
   Button,
   ProgressBar,
   Badge,
-  Icon,
+  InlineStack,
   Box,
-  LegacyStack
+  Divider,
+  EmptyState,
+  SkeletonBodyText,
+  SkeletonDisplayText,
+  Tooltip,
+  Icon
 } from "@shopify/polaris";
+import { AlertDiamondIcon } from "@shopify/polaris-icons";
 import { getSettings, applySettingsToCalculations, subscribeToSettingsChanges } from "../utils/settings";
 
 export const loader = async ({ request }) => {
@@ -131,6 +137,7 @@ export const loader = async ({ request }) => {
 export default function Dashboard() {
   const { products, error } = useLoaderData();
   const [appSettings, setAppSettings] = useState(getSettings());
+  const [isLoading, setIsLoading] = useState(true);
   
   // Subscribe to settings changes with error handling
   useEffect(() => {
@@ -146,8 +153,14 @@ export default function Dashboard() {
         }
       });
       
+      // Simulate loading state for better UX
+      const timer = setTimeout(() => {
+        setIsLoading(false);
+      }, 500);
+      
       return () => {
         isSubscribed = false;
+        clearTimeout(timer);
         try {
           unsubscribe();
         } catch (error) {
@@ -156,6 +169,7 @@ export default function Dashboard() {
       };
     } catch (error) {
       console.error("Error setting up settings subscription:", error);
+      setIsLoading(false);
       return () => {};
     }
   }, []);
@@ -220,13 +234,16 @@ export default function Dashboard() {
         <Layout>
           <Layout.Section>
             <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd" color="critical">
-                  Error Loading Dashboard
-                </Text>
-                <Text>{error}</Text>
-                <Text>Please try refreshing the page or contact support if the problem persists.</Text>
-              </BlockStack>
+              <Card.Section>
+                <EmptyState
+                  heading="Error Loading Dashboard"
+                  image={null}
+                  action={{content: 'Retry', onAction: () => window.location.reload()}}
+                >
+                  <p>{error}</p>
+                  <p>Please try refreshing the page or contact support if the problem persists.</p>
+                </EmptyState>
+              </Card.Section>
             </Card>
           </Layout.Section>
         </Layout>
@@ -261,6 +278,31 @@ export default function Dashboard() {
   // Get products needing immediate action
   const priorityProducts = productData.filter(p => p.status === "critical" || p.status === "warning");
   
+  if (isLoading) {
+    return (
+      <Page title="Visual Inventory Dashboard" backAction={{content: 'Main Dashboard', url: '/app'}}>
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="500">
+                <SkeletonDisplayText size="small" />
+                <SkeletonBodyText lines={3} />
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="500">
+                <SkeletonDisplayText size="small" />
+                <SkeletonBodyText lines={5} />
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+  
   return (
     <Page
       title="Visual Inventory Dashboard"
@@ -277,30 +319,81 @@ export default function Dashboard() {
                 Inventory Health Overview
               </Text>
               
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ height: '24px', display: 'flex', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div style={{ width: `${healthPercentages.critical}%`, backgroundColor: '#DE3618' }}></div>
-                    <div style={{ width: `${healthPercentages.warning}%`, backgroundColor: '#EEC200' }}></div>
-                    <div style={{ width: `${healthPercentages.attention}%`, backgroundColor: '#9C6ADE' }}></div>
-                    <div style={{ width: `${healthPercentages.success}%`, backgroundColor: '#108043' }}></div>
-                  </div>
-                </div>
+              <BlockStack gap="400">
+                {/* Health Meter - using Polaris tokens and improved accessibility */}
+                <InlineStack gap="400" align="space-between">
+                  <Box 
+                    background="bg-surface-secondary" 
+                    borderRadius="300" 
+                    padding="100" 
+                    width="100%"
+                    minHeight="32px"
+                    role="progressbar"
+                    aria-label="Inventory health distribution"
+                  >
+                    <Box 
+                      background="bg-critical"
+                      borderRadiusStartStart="300"
+                      borderRadiusEndStart={healthPercentages.critical === 100 ? "300" : "0"}
+                      height="100%"
+                      minHeight="16px"
+                      width={`${healthPercentages.critical}%`}
+                      display="inline-block"
+                    />
+                    <Box 
+                      background="bg-warning"
+                      borderRadius={healthPercentages.critical === 0 && healthPercentages.warning === 100 ? "300" : "0"}
+                      height="100%"
+                      minHeight="16px"
+                      width={`${healthPercentages.warning}%`}
+                      display="inline-block"
+                    />
+                    <Box 
+                      background="bg-highlight"
+                      borderRadius={healthPercentages.critical === 0 && healthPercentages.warning === 0 && healthPercentages.attention === 100 ? "300" : "0"}
+                      height="100%"
+                      minHeight="16px"
+                      width={`${healthPercentages.attention}%`}
+                      display="inline-block"
+                    />
+                    <Box 
+                      background="bg-success"
+                      borderRadiusEndEnd="300"
+                      borderRadiusStartEnd={healthPercentages.success === 100 ? "300" : "0"}
+                      height="100%"
+                      minHeight="16px"
+                      width={`${healthPercentages.success}%`}
+                      display="inline-block"
+                    />
+                  </Box>
+                  
+                  <InlineStack gap="200">
+                    <Tooltip content="Critical inventory levels">
+                      <Badge status="critical">{inventoryHealthCounts.critical}</Badge>
+                    </Tooltip>
+                    <Tooltip content="Warning inventory levels">
+                      <Badge status="warning">{inventoryHealthCounts.warning}</Badge>
+                    </Tooltip>
+                    <Tooltip content="Items to monitor">
+                      <Badge status="attention">{inventoryHealthCounts.attention}</Badge>
+                    </Tooltip>
+                    <Tooltip content="Healthy inventory levels">
+                      <Badge status="success">{inventoryHealthCounts.success}</Badge>
+                    </Tooltip>
+                  </InlineStack>
+                </InlineStack>
                 
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <Badge status="critical">{inventoryHealthCounts.critical}</Badge>
-                  <Badge status="warning">{inventoryHealthCounts.warning}</Badge>
-                  <Badge status="attention">{inventoryHealthCounts.attention}</Badge>
-                  <Badge status="success">{inventoryHealthCounts.success}</Badge>
-                </div>
-              </div>
-              
-              <div>
-                <Text>{inventoryHealthCounts.critical + inventoryHealthCounts.warning} products need attention</Text>
-                <Text variant="bodySm" color="subdued">
-                  Using lead time of {appSettings.leadTime} days and safety stock of {appSettings.safetyStockDays} days
-                </Text>
-              </div>
+                <BlockStack gap="100">
+                  <Text>
+                    {inventoryHealthCounts.critical + inventoryHealthCounts.warning === 0 
+                      ? "All products have healthy inventory levels" 
+                      : `${inventoryHealthCounts.critical + inventoryHealthCounts.warning} products need attention`}
+                  </Text>
+                  <Text variant="bodySm" color="subdued">
+                    Using lead time of {appSettings.leadTime} days and safety stock of {appSettings.safetyStockDays} days
+                  </Text>
+                </BlockStack>
+              </BlockStack>
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -315,53 +408,58 @@ export default function Dashboard() {
               {priorityProducts.length > 0 ? (
                 <BlockStack gap="400">
                   {priorityProducts.map(product => (
-                    <div 
-                      key={product.id} 
-                      style={{ 
-                        padding: '12px', 
-                        backgroundColor: product.status === 'critical' ? '#FFF4F4' : '#FFFBEA',
-                        borderRadius: '4px',
-                        marginBottom: '8px'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                        <div>
-                          <Text variant="headingSm">{product.title}</Text>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                            <Badge status={product.status}>{product.statusLabel}</Badge>
-                            <Text variant="bodySm">
-                              {product.daysOfSupply === 0 
-                                ? 'Currently out of stock' 
-                                : `${product.daysOfSupply} days of inventory left`}
-                            </Text>
-                          </div>
-                        </div>
+                    <Card key={product.id} background={product.status === 'critical' ? 'bg-critical-subdued' : 'bg-warning-subdued'}>
+                      <BlockStack gap="400">
+                        <InlineStack gap="400" align="space-between" blockAlign="center">
+                          <BlockStack gap="100">
+                            <InlineStack gap="200" blockAlign="center">
+                              {product.status === 'critical' && (
+                                <Icon source={AlertDiamondIcon} tone="critical" />
+                              )}
+                              <Text variant="headingSm">{product.title}</Text>
+                            </InlineStack>
+                            <InlineStack gap="200" blockAlign="center">
+                              <Badge status={product.status}>{product.statusLabel}</Badge>
+                              <Text variant="bodySm">
+                                {product.daysOfSupply === 0 
+                                  ? 'Currently out of stock' 
+                                  : `${product.daysOfSupply} days of inventory left`}
+                              </Text>
+                            </InlineStack>
+                          </BlockStack>
+                          
+                          <Link to="/app/order-automation">
+                            <Button primary={product.status === 'critical'}>
+                              {product.status === 'critical' ? 'Restock Now' : 'Reorder'}
+                            </Button>
+                          </Link>
+                        </InlineStack>
                         
-                        <Link to="/app/order-automation">
-                          <Button primary={product.status === 'critical'}>
-                            {product.status === 'critical' ? 'Restock Now' : 'Reorder'}
-                          </Button>
-                        </Link>
-                      </div>
-                      
-                      {product.daysOfSupply > 0 && (
-                        <div style={{ marginTop: '8px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                            <Text variant="bodySm">Inventory Timeline</Text>
-                            <Text variant="bodySm">{product.daysOfSupply} days</Text>
-                          </div>
-                          <ProgressBar 
-                            progress={Math.min(100, (product.daysOfSupply / (Math.max(1, appSettings.safetyStockDays + appSettings.leadTime))) * 100)} 
-                            size="small"
-                            color={product.status === 'critical' ? 'critical' : 'warning'}
-                          />
-                        </div>
-                      )}
-                    </div>
+                        {product.daysOfSupply > 0 && (
+                          <BlockStack gap="100">
+                            <InlineStack gap="400" align="space-between">
+                              <Text variant="bodySm">Inventory Timeline</Text>
+                              <Text variant="bodySm">{product.daysOfSupply} days</Text>
+                            </InlineStack>
+                            <ProgressBar 
+                              progress={Math.min(100, (product.daysOfSupply / (Math.max(1, appSettings.safetyStockDays + appSettings.leadTime))) * 100)} 
+                              size="small"
+                              tone={product.status === 'critical' ? 'critical' : 'warning'}
+                              aria-label={`${product.title} inventory: ${product.daysOfSupply} days remaining`}
+                            />
+                          </BlockStack>
+                        )}
+                      </BlockStack>
+                    </Card>
                   ))}
                 </BlockStack>
               ) : (
-                <Text>All products have healthy inventory levels</Text>
+                <EmptyState
+                  heading="All products have healthy inventory levels"
+                  image=""
+                >
+                  <p>Your inventory is currently in a good state. Continue monitoring for changes.</p>
+                </EmptyState>
               )}
             </BlockStack>
           </Card>
@@ -376,68 +474,39 @@ export default function Dashboard() {
               
               <BlockStack gap="400">
                 {productData.map(product => (
-                  <div key={product.id} style={{ marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <BlockStack key={product.id} gap="200">
+                    <InlineStack align="space-between" blockAlign="center">
                       <Text variant="bodyMd">{product.title}</Text>
                       <Badge status={product.status}>{product.statusLabel}</Badge>
-                    </div>
+                    </InlineStack>
                     
-                    <div style={{ position: 'relative', height: '32px', background: '#F4F6F8', borderRadius: '3px' }}>
-                      {/* Timeline with key markers */}
-                      <div style={{ position: 'absolute', left: '25%', top: 0, height: '100%', borderLeft: '1px dashed #637381', paddingLeft: '4px' }}>
-                        <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.25)}d</Text>
-                      </div>
-                      
-                      <div style={{ position: 'absolute', left: '50%', top: 0, height: '100%', borderLeft: '1px dashed #637381', paddingLeft: '4px' }}>
-                        <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.5)}d</Text>
-                      </div>
-                      
-                      <div style={{ position: 'absolute', left: '75%', top: 0, height: '100%', borderLeft: '1px dashed #637381', paddingLeft: '4px' }}>
-                        <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.75)}d</Text>
-                      </div>
-                      
-                      {/* Inventory remaining indicator */}
-                      <div 
-                        style={{ 
-                          position: 'absolute', 
-                          left: 0, 
-                          top: '6px',
-                          height: '20px', 
-                          width: `${Math.min(100, (product.daysOfSupply / Math.max(1, appSettings.safetyStockDays)) * 100)}%`,
-                          background: getTimelineColor(product.status),
-                          borderRadius: '2px'
-                        }}
-                      ></div>
-                      
-                      {/* Stock out indicator */}
-                      {product.daysOfSupply < appSettings.safetyStockDays && (
-                        <div 
-                          style={{ 
-                            position: 'absolute', 
-                            left: `${Math.min(100, (product.daysOfSupply / Math.max(1, appSettings.safetyStockDays)) * 100)}%`, 
-                            top: 0,
-                            height: '32px', 
-                            width: '2px',
-                            background: '#DE3618'
-                          }}
-                        ></div>
-                      )}
-                      
-                      {/* Reorder point indicator - added safety check for divide by zero */}
-                      {product.currentStock > 0 && product.calculations.reorderPoint < product.currentStock && (
-                        <div 
-                          style={{ 
-                            position: 'absolute', 
-                            left: `${Math.min(100, (product.calculations.reorderPoint / product.currentStock) * 100)}%`, 
-                            top: 0,
-                            height: '32px', 
-                            width: '2px',
-                            background: '#8c6e00'
-                          }}
-                        ></div>
-                      )}
-                    </div>
-                  </div>
+                    <BlockStack gap="100">
+                      <Box padding="200" background="bg-surface-secondary" borderRadius="300">
+                        {/* Timeline markers with improved accessibility */}
+                        <InlineStack gap="400" align="space-between">
+                          <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.25)}d</Text>
+                          <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.5)}d</Text>
+                          <Text variant="bodySm" color="subdued">{Math.ceil(appSettings.safetyStockDays * 0.75)}d</Text>
+                        </InlineStack>
+                        
+                        {/* Inventory progress */}
+                        <Box paddingBlock="200">
+                          <ProgressBar 
+                            progress={Math.min(100, (product.daysOfSupply / Math.max(1, appSettings.safetyStockDays)) * 100)} 
+                            size="small"
+                            tone={
+                              product.status === 'critical' ? 'critical' : 
+                              product.status === 'warning' ? 'warning' :
+                              product.status === 'attention' ? 'highlight' : 'success'
+                            }
+                            aria-label={`${product.title} inventory: ${product.daysOfSupply} days supply out of ${appSettings.safetyStockDays} days target`}
+                          />
+                        </Box>
+                      </Box>
+                    </BlockStack>
+                    
+                    {product.id !== productData[productData.length-1].id && <Divider />}
+                  </BlockStack>
                 ))}
               </BlockStack>
             </BlockStack>
@@ -446,24 +515,4 @@ export default function Dashboard() {
       </Layout>
     </Page>
   );
-}
-
-// Helper function to get the appropriate color for timeline visualization
-function getTimelineColor(status) {
-  if (!status) {
-    return '#AEE9AF'; // Default fallback color for undefined status
-  }
-  
-  switch (status) {
-    case 'critical':
-      return '#FADBD7';
-    case 'warning':
-      return '#FFEB99';
-    case 'attention':
-      return '#E4D6FF';
-    case 'success':
-      return '#AEE9AF';
-    default:
-      return '#AEE9AF'; // Default color
-  }
 }

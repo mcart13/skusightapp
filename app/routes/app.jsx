@@ -6,7 +6,18 @@ import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import { useEffect, useMemo } from "react";
 import { json } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
-import { Card, EmptyState, Layout, Page, Text, Button, Banner } from "@shopify/polaris";
+import { 
+  Card, 
+  EmptyState, 
+  Layout, 
+  Page, 
+  Text, 
+  Button, 
+  Banner, 
+  Frame,
+  TopBar,
+  ContextualSaveBar
+} from "@shopify/polaris";
 
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
@@ -36,6 +47,7 @@ export const loader = async ({ request }) => {
     // IMPORTANT: This should be removed in production
     if (process.env.NODE_ENV === 'development') {
       console.warn("⚠️ Development mode: Using test store fallback authentication");
+      
       return json({
         apiKey: process.env.SHOPIFY_API_KEY || "",
         shop: "testingstore.myshopify.com",
@@ -60,68 +72,16 @@ export const loader = async ({ request }) => {
 };
 
 export default function App() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { apiKey, shop, host, isAuthenticated, isTestStore, isDevelopmentFallback, userError } = useLoaderData();
+  const { 
+    apiKey, 
+    shop, 
+    host, 
+    isAuthenticated, 
+    isTestStore, 
+    isDevelopmentFallback, 
+    userError
+  } = useLoaderData();
   
-  // Redirect to login if not authenticated
-  useEffect(() => {
-    if (!isAuthenticated && userError) {
-      // In a real app, we'd redirect to the login page
-      // For now, we'll just navigate to root
-      navigate('/', { replace: true });
-    }
-  }, [isAuthenticated, userError, navigate]);
-
-  // Create URL search params object for consistent parameter handling
-  const buildUrl = useMemo(() => {
-    return (path) => {
-      const params = new URLSearchParams();
-      if (shop) params.set('shop', shop);
-      if (host) params.set('host', host);
-      
-      return `${path}?${params.toString()}`;
-    };
-  }, [shop, host]);
-  
-  // Navigation menu with proper dynamic URLs
-  const navItems = useMemo(() => [
-    {
-      label: "Home",
-      destination: buildUrl('/app')
-    },
-    {
-      label: "Visual Dashboard", 
-      destination: buildUrl('/app/dashboard')
-    },
-    {
-      label: "Sales Analysis",
-      destination: buildUrl('/app/sales-analysis')
-    },
-    {
-      label: "Restock Orders",
-      destination: buildUrl('/app/order-automation')
-    },
-    {
-      label: "System Status",
-      destination: buildUrl('/app/system-status')
-    },
-    {
-      label: "Logs & Monitoring",
-      destination: buildUrl('/app/logsview'),
-      subNavigationItems: [
-        {
-          destination: buildUrl('/app/logsview'),
-          label: 'View Logs',
-        }
-      ]
-    },
-    {
-      label: "Settings",
-      destination: buildUrl('/app/settings')
-    }
-  ], [buildUrl]);
-
   // If authentication failed, show an error state
   if (!isAuthenticated && userError) {
     return (
@@ -145,6 +105,7 @@ export default function App() {
     );
   }
 
+  // Standard embedded app setup with Frame component
   return (
     <AppProvider
       isEmbeddedApp={true}
@@ -153,14 +114,23 @@ export default function App() {
       host={host}
       forceRedirect={!isTestStore} // Only force redirect for non-test stores
     >
-      {isDevelopmentFallback && (
-        <Banner status="warning" title="Development Mode">
-          <p>⚠️ Using test store data for development. This authentication bypass should be removed in production.</p>
-        </Banner>
-      )}
-      
-      <NavMenu navigation={navItems} />
-      <Outlet context={{ shop, host, isTestStore }} />
+      <Frame>
+        {isDevelopmentFallback && (
+          <Banner status="warning" title="Development Mode">
+            <p>⚠️ Using test store data for development. This authentication bypass should be removed in production.</p>
+          </Banner>
+        )}
+        
+        <NavMenu>
+          <a href={`/app?shop=${shop}&host=${host}`} rel="home">Home</a>
+          <a href={`/app/dashboard?shop=${shop}&host=${host}`}>Visual Dashboard</a>
+          <a href={`/app/sales-analysis?shop=${shop}&host=${host}`}>Sales Analysis</a>
+          <a href={`/app/order-automation?shop=${shop}&host=${host}`}>Restock Orders</a>
+          <a href={`/app/system-status?shop=${shop}&host=${host}`}>System Status</a>
+          <a href={`/app/settings?shop=${shop}&host=${host}`}>Settings</a>
+        </NavMenu>
+        <Outlet context={{ shop, host, isTestStore }} />
+      </Frame>
     </AppProvider>
   );
 }

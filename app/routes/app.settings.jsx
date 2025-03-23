@@ -1,27 +1,23 @@
 import { useState, useEffect, useRef } from "react";
 import { json } from "@remix-run/node";
-import { useActionData, useLoaderData, useSubmit, useNavigate, useLocation, useOutletContext, Form } from "@remix-run/react";
+import { useActionData, useLoaderData, useSubmit, Link, useNavigate, Form } from "@remix-run/react";
 import {
   Page,
   Layout,
   Card,
   Text,
   BlockStack,
-  FormLayout,
-  TextField,
-  Button,
-  Select,
   Banner,
-  Divider,
-  InlineStack,
-  Checkbox,
-  Toast,
-  ChoiceList,
   Frame,
-  Modal
+  Button
 } from "@shopify/polaris";
-import { DEFAULT_SETTINGS, SETTINGS_STORAGE_KEY, SETTINGS_CHANGED_EVENT } from "../utils/constants";
+import { DEFAULT_SETTINGS } from "../utils/constants";
 import { getSettings, saveSettings } from "../utils/settings";
+import {
+  SettingsForm,
+  NavigationConfirmationModal,
+  SuccessToast
+} from "../components/Settings";
 
 export const loader = async ({ request }) => {
   // Import our authentication utility that bypasses Shopify auth
@@ -69,36 +65,22 @@ export const action = async ({ request }) => {
 export default function Settings() {
   const navigate = useNavigate();
   const { initialSettings } = useLoaderData();
-  const { shop, host } = useOutletContext();
   const actionData = useActionData();
   const submit = useSubmit();
+  
+  // UI state
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [settings, setSettings] = useState(initialSettings);
   const [showNavigationModal, setShowNavigationModal] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const formRef = useRef(null);
   
-  // Initialize form values as an empty state that will be populated
-  const [formValues, setFormValues] = useState({
-    leadTime: "",
-    notificationPreferences: [],
-    advancedEnabled: false,
-    safetyStockDays: "",
-    serviceLevelPercent: "",
-    lowStockThreshold: "",
-    criticalStockThreshold: "",
-    forecastDays: "",
-    restockStrategy: "",
-    aiTaggingEnabled: true,
-    aiTaggingFrequency: "",
-    aiTaggingBatchSize: "",
-    aiTaggingDataSources: []
-  });
-  
-  // Store a reference to the last saved form values
+  // Settings state
+  const [settings, setSettings] = useState(initialSettings);
+  const [formValues, setFormValues] = useState({});
   const [savedFormValues, setSavedFormValues] = useState(null);
+  
+  const formRef = useRef(null);
   
   // Load settings from localStorage on component mount
   useEffect(() => {
@@ -116,7 +98,7 @@ export default function Settings() {
       criticalStockThreshold: loadedSettings.criticalStockThreshold?.toString() || "3",
       forecastDays: loadedSettings.forecastDays?.toString() || "30",
       restockStrategy: loadedSettings.restockStrategy || "economic",
-      aiTaggingEnabled: loadedSettings.aiTaggingEnabled || true,
+      aiTaggingEnabled: loadedSettings.aiTaggingEnabled ?? true,
       aiTaggingFrequency: loadedSettings.aiTaggingFrequency || "daily",
       aiTaggingBatchSize: loadedSettings.aiTaggingBatchSize || "50",
       aiTaggingDataSources: loadedSettings.aiTaggingDataSources || ["metadata", "sales", "margins", "seasonal", "leadtime"]
@@ -128,14 +110,22 @@ export default function Settings() {
     setHasUnsavedChanges(false);
   }, []);
   
-  // Compare current form values with saved form values whenever form values change
+  // Add event listener for page unload when there are unsaved changes
   useEffect(() => {
-    if (savedFormValues && !isSubmitting) {
-      const formString = JSON.stringify(formValues);
-      const savedString = JSON.stringify(savedFormValues);
-      setHasUnsavedChanges(formString !== savedString);
-    }
-  }, [formValues, savedFormValues, isSubmitting]);
+    const handleBeforeUnload = (e) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved changes that will be lost if you leave this page.";
+        return e.returnValue;
+      }
+    };
+    
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [hasUnsavedChanges]);
   
   // Handle successful form submission
   useEffect(() => {
@@ -143,381 +133,143 @@ export default function Settings() {
       // Reset submission state
       setIsSubmitting(false);
       
-      // Show success toast for 3 seconds
+      // Show success toast
       setShowSuccessToast(true);
-      const timer = setTimeout(() => {
-        setShowSuccessToast(false);
-      }, 3000);
       
-      // Convert form values to settings object
-      const settingsToSave = {
-        leadTime: parseInt(formValues.leadTime),
-        notificationPreferences: formValues.notificationPreferences,
-        advancedEnabled: formValues.advancedEnabled,
-        safetyStockDays: parseInt(formValues.safetyStockDays),
-        serviceLevelPercent: parseInt(formValues.serviceLevelPercent),
-        lowStockThreshold: parseInt(formValues.lowStockThreshold),
-        criticalStockThreshold: parseInt(formValues.criticalStockThreshold),
-        forecastDays: parseInt(formValues.forecastDays),
-        restockStrategy: formValues.restockStrategy,
-        aiTaggingEnabled: formValues.aiTaggingEnabled,
-        aiTaggingFrequency: formValues.aiTaggingFrequency,
-        aiTaggingBatchSize: formValues.aiTaggingBatchSize,
-        aiTaggingDataSources: formValues.aiTaggingDataSources
-      };
+      // Save to localStorage
+      saveSettings(actionData.settings);
       
-      // Save settings
-      saveSettings(settingsToSave);
-      
-      // Update the settings state
-      setSettings(settingsToSave);
-      
-      // After saving, create a new copy of form values to detect future changes
+      // Update saved values to match current values
       setSavedFormValues(JSON.parse(JSON.stringify(formValues)));
-      
-      // Reset unsaved changes flag
       setHasUnsavedChanges(false);
-      
-      // If there's a pending navigation, execute it using Remix's navigate
-      if (pendingNavigation) {
-        const urlParams = shop && host ? `?shop=${shop}&host=${host}` : '';
-        navigate(`${pendingNavigation}${urlParams}`, { replace: true });
-        setPendingNavigation(null);
-      }
-      
-      // Clean up timer if component unmounts
-      return () => clearTimeout(timer);
     }
-  }, [actionData, formValues, shop, host, pendingNavigation, isSubmitting, navigate]);
-  
-  // Handle beforeunload event to warn about unsaved changes
-  useEffect(() => {
-    const handleBeforeUnload = (e) => {
-      // Only trigger warning if there are unsaved changes AND we're not currently submitting
-      if (hasUnsavedChanges && !isSubmitting) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    };
-    
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [hasUnsavedChanges, isSubmitting]);
+  }, [actionData, isSubmitting, formValues]);
   
   // Handle form submission
-  const handleSubmit = () => {
-    // Set submitting state to true to indicate intentional submission
+  const handleSubmit = (values) => {
     setIsSubmitting(true);
     
-    // Create FormData for Remix submit function
+    // Convert form values to FormData
     const formData = new FormData();
     
-    // Add all form values
-    formData.append("leadTime", formValues.leadTime);
-    formValues.notificationPreferences.forEach(pref => {
-      formData.append("notificationPreferences", pref);
-    });
-    formData.append("advancedEnabled", formValues.advancedEnabled.toString());
-    formData.append("safetyStockDays", formValues.safetyStockDays);
-    formData.append("serviceLevelPercent", formValues.serviceLevelPercent);
-    formData.append("lowStockThreshold", formValues.lowStockThreshold);
-    formData.append("criticalStockThreshold", formValues.criticalStockThreshold);
-    formData.append("forecastDays", formValues.forecastDays);
-    formData.append("restockStrategy", formValues.restockStrategy);
-    
-    // AI tagging settings
-    formData.append("aiTaggingEnabled", formValues.aiTaggingEnabled.toString());
-    formData.append("aiTaggingFrequency", formValues.aiTaggingFrequency);
-    formData.append("aiTaggingBatchSize", formValues.aiTaggingBatchSize);
-    formValues.aiTaggingDataSources.forEach(source => {
-      formData.append("aiTaggingDataSources", source);
+    Object.entries(values).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(val => formData.append(key, val));
+      } else if (typeof value === 'boolean') {
+        formData.append(key, value.toString());
+      } else {
+        formData.append(key, value);
+      }
     });
     
-    // Use Remix's submit function which will handle the submission as an AJAX request
     submit(formData, { method: "post" });
   };
   
   // Handle form value changes
   const handleFormValueChange = (newValues) => {
-    // Update form values with the new values
-    setFormValues({...formValues, ...newValues});
+    setFormValues(newValues);
+    if (savedFormValues) {
+      const formString = JSON.stringify(newValues);
+      const savedString = JSON.stringify(savedFormValues);
+      setHasUnsavedChanges(formString !== savedString);
+    }
   };
   
-  // Handle navigation when there are unsaved changes
+  // Handle navigation away from the page
   const handleBackNavigation = () => {
     if (hasUnsavedChanges) {
-      // Show confirmation dialog
+      // Store the pending navigation and show confirmation dialog
+      setPendingNavigation("/app");
       setShowNavigationModal(true);
-      setPendingNavigation('/app');
     } else {
-      // Use Remix's navigate function instead of direct window.location
-      const urlParams = shop && host ? `?shop=${shop}&host=${host}` : '';
-      navigate(`/app${urlParams}`);
+      // No changes, navigate directly
+      navigate("/app");
     }
   };
   
   // Handle confirmed navigation
   const handleConfirmedNavigation = () => {
+    setShowNavigationModal(false);
+    
     if (pendingNavigation) {
-      const urlParams = shop && host ? `?shop=${shop}&host=${host}` : '';
-      navigate(`${pendingNavigation}${urlParams}`, { replace: true });
-      setPendingNavigation(null);
-      setShowNavigationModal(false);
+      navigate(pendingNavigation);
     }
   };
   
   return (
     <Frame>
-      <Page 
-        title="SkuSight Settings" 
-        subtitle="Smart defaults already applied - customize only if needed"
+      <Page
+        title="Settings"
         backAction={{
-          content: 'Inventory Dashboard',
+          content: "Dashboard",
           onAction: handleBackNavigation
         }}
+        primaryAction={
+          <Button onClick={() => navigate("/app/sales-analysis")}>
+            View Sales Analysis
+          </Button>
+        }
       >
-        {/* Only show the unsaved changes notification if changes are detected */}
-        {hasUnsavedChanges && (
-          <div style={{ 
-            position: 'sticky', 
-            top: '0', 
-            zIndex: 10, 
-            backgroundColor: '#f4f6f8', 
-            padding: '16px', 
-            marginBottom: '16px',
-            borderRadius: '4px',
-            boxShadow: '0 2px 5px rgba(0, 0, 0, 0.15)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            borderLeft: '4px solid #50b83c'
-          }}>
-            <Text variant="bodyMd" fontWeight="medium">You have unsaved changes</Text>
-            <Button primary onClick={handleSubmit}>Save Changes</Button>
-          </div>
-        )}
-
-        <Form
-          method="post"
-          ref={formRef}
-        >
+        <BlockStack gap="5">
+          {actionData?.success === false && (
+            <Banner tone="critical">
+              {actionData.message || "There was an error saving your settings."}
+            </Banner>
+          )}
+          
           <Layout>
             <Layout.Section>
-              <Card>
-                <BlockStack gap="4">
-                  <Text variant="headingMd">General Settings</Text>
-                  
-                  <Banner title="Smart defaults applied">
-                    <p>We've analyzed your store and applied optimal settings automatically. 
-                    Adjustments are optional.</p>
-                  </Banner>
-                  
-                  <FormLayout>
-                    <TextField
-                      label="Default restock lead time (days)"
-                      type="number"
-                      value={formValues.leadTime}
-                      onChange={(value) => handleFormValueChange({leadTime: value})}
-                      helpText="We'll alert you this many days before you run out of stock"
-                      autoComplete="off"
-                    />
-                    
-                    <ChoiceList
-                      allowMultiple
-                      title="Send alerts via:"
-                      choices={[
-                        { label: "Email", value: "email" },
-                        { label: "Shopify admin notifications", value: "admin" },
-                        { label: "SMS (coming soon)", value: "sms", disabled: true },
-                      ]}
-                      selected={formValues.notificationPreferences}
-                      onChange={(value) => handleFormValueChange({notificationPreferences: value})}
-                    />
-                  </FormLayout>
-                  
-                  <Divider />
-                </BlockStack>
-              </Card>
+              <SettingsForm
+                initialValues={formValues}
+                onSubmit={handleSubmit}
+                onFormChange={handleFormValueChange}
+                hasUnsavedChanges={hasUnsavedChanges}
+                isSubmitting={isSubmitting}
+              />
             </Layout.Section>
             
-            <Layout.Section>
+            <Layout.Section secondary>
               <Card>
                 <BlockStack gap="4">
-                  <InlineStack align="space-between">
-                    <Text variant="headingMd">Advanced Settings</Text>
-                    <div>
-                      <Checkbox
-                        label="Enable advanced settings"
-                        checked={formValues.advancedEnabled}
-                        onChange={(checked) => handleFormValueChange({advancedEnabled: checked})}
-                      />
-                    </div>
-                  </InlineStack>
+                  <Text variant="headingMd" fontWeight="semibold">
+                    Settings Help
+                  </Text>
                   
-                  {!formValues.advancedEnabled ? (
-                    <Text variant="bodyMd" color="subdued">
-                      The default settings work for most stores. Enable advanced options 
-                      only if you need to customize thresholds, forecasting parameters, or inventory algorithms.
-                    </Text>
-                  ) : (
-                    <BlockStack gap="4">
-                      <Text variant="headingMd">Inventory Calculation Settings</Text>
-                      <FormLayout>
-                        <FormLayout.Group>
-                          <TextField
-                            label="Safety Stock (days)"
-                            type="number"
-                            value={formValues.safetyStockDays}
-                            onChange={(value) => handleFormValueChange({safetyStockDays: value})}
-                            helpText="Extra inventory to prevent stockouts during demand spikes"
-                          />
-                          
-                          <TextField
-                            label="Service Level Percentage"
-                            type="number"
-                            value={formValues.serviceLevelPercent}
-                            onChange={(value) => handleFormValueChange({serviceLevelPercent: value})}
-                            helpText="Higher service levels reduce stockouts but increase costs (80-99%)"
-                          />
-                        </FormLayout.Group>
-                        
-                        <Select
-                          label="Restock Strategy"
-                          options={[
-                            { label: "Economic Order Quantity (EOQ)", value: "economic" },
-                            { label: "Just-in-Time", value: "jit" },
-                            { label: "Fixed Safety Stock", value: "fixed" }
-                          ]}
-                          value={formValues.restockStrategy}
-                          onChange={(value) => handleFormValueChange({restockStrategy: value})}
-                          helpText="The algorithm used to determine optimal order quantities"
-                        />
-                        
-                        <Divider />
-                        
-                        <Text variant="headingMd">Alert Settings</Text>
-                        <FormLayout.Group>
-                          <TextField
-                            label="Low Stock Threshold (days)"
-                            type="number"
-                            value={formValues.lowStockThreshold}
-                            onChange={(value) => handleFormValueChange({lowStockThreshold: value})}
-                            helpText="Days of inventory to trigger low stock alerts"
-                          />
-                          
-                          <TextField
-                            label="Critical Stock Threshold (days)"
-                            type="number"
-                            value={formValues.criticalStockThreshold}
-                            onChange={(value) => handleFormValueChange({criticalStockThreshold: value})}
-                            helpText="Days of inventory to trigger critical alerts"
-                          />
-                        </FormLayout.Group>
-                        
-                        <TextField
-                          label="Forecast Days"
-                          type="number"
-                          value={formValues.forecastDays}
-                          onChange={(value) => handleFormValueChange({forecastDays: value})}
-                          helpText="Number of days to include in inventory forecasts"
-                        />
-                        
-                        <Divider />
-                        
-                        <Text variant="headingMd">AI Tagging System</Text>
-                        <Banner title="Automatic AI tagging" status="info">
-                          <p>The AI tagging system automatically analyzes your products and adds smart tags to optimize inventory forecasting.</p>
-                        </Banner>
-                        
-                        <Checkbox
-                          label="Enable automatic AI tagging"
-                          checked={formValues.aiTaggingEnabled}
-                          onChange={(checked) => handleFormValueChange({aiTaggingEnabled: checked})}
-                          helpText="When enabled, AI tags will be automatically applied to your products on a regular schedule"
-                        />
-                        
-                        <FormLayout.Group>
-                          <Select
-                            label="Tagging Frequency"
-                            disabled={!formValues.aiTaggingEnabled}
-                            options={[
-                              { label: "Daily", value: "daily" },
-                              { label: "Weekly", value: "weekly" },
-                              { label: "Monthly", value: "monthly" },
-                              { label: "With inventory changes", value: "changes" }
-                            ]}
-                            value={formValues.aiTaggingFrequency}
-                            onChange={(value) => handleFormValueChange({aiTaggingFrequency: value})}
-                            helpText="How often AI should analyze and update product tags"
-                          />
-                          
-                          <TextField
-                            label="Products Per Batch"
-                            type="number"
-                            disabled={!formValues.aiTaggingEnabled}
-                            value={formValues.aiTaggingBatchSize}
-                            onChange={(value) => handleFormValueChange({aiTaggingBatchSize: value})}
-                            helpText="Maximum number of products to process in each batch"
-                          />
-                        </FormLayout.Group>
-                        
-                        <FormLayout.Group>
-                          <ChoiceList
-                            title="Data Sources for Tagging"
-                            disabled={!formValues.aiTaggingEnabled}
-                            allowMultiple
-                            choices={[
-                              { label: "Product categories and vendors", value: "metadata", disabled: false },
-                              { label: "Sales history and velocity", value: "sales", disabled: false },
-                              { label: "Price and margins", value: "margins", disabled: false },
-                              { label: "Seasonality patterns", value: "seasonal", disabled: false },
-                              { label: "Supplier lead times", value: "leadtime", disabled: false }
-                            ]}
-                            selected={formValues.aiTaggingDataSources}
-                            onChange={(value) => handleFormValueChange({aiTaggingDataSources: value})}
-                          />
-                        </FormLayout.Group>
-                      </FormLayout>
-                    </BlockStack>
-                  )}
+                  <Text>
+                    Configure your inventory management preferences here. These settings affect how the app calculates reorder points,
+                    safety stock, and when to alert you about low inventory.
+                  </Text>
+                  
+                  <Text>
+                    <strong>Lead Time:</strong> The average time it takes from placing an order to receiving it at your warehouse.
+                  </Text>
+                  
+                  <Text>
+                    <strong>Safety Stock:</strong> Extra inventory kept to reduce the risk of stockouts due to uncertainty in demand and supply.
+                  </Text>
+                  
+                  <Text>
+                    <strong>AI Tagging:</strong> Enables the system to automatically categorize and tag your products based on multiple data sources.
+                  </Text>
                 </BlockStack>
               </Card>
             </Layout.Section>
           </Layout>
-          
-          {/* Success toast - controlled by a single state variable */}
-          {showSuccessToast && (
-            <Toast content="Settings saved successfully" onDismiss={() => setShowSuccessToast(false)} />
-          )}
-          
-          {/* Navigation confirmation modal */}
-          <Modal
-            open={showNavigationModal}
-            onClose={() => setShowNavigationModal(false)}
-            title="Unsaved Changes"
-            primaryAction={{
-              content: "Save and Continue",
-              onAction: handleSubmit
-            }}
-            secondaryActions={[
-              {
-                content: "Leave Without Saving",
-                onAction: handleConfirmedNavigation
-              },
-              {
-                content: "Cancel",
-                onAction: () => setShowNavigationModal(false)
-              }
-            ]}
-          >
-            <Modal.Section>
-              <Text>You have unsaved changes. What would you like to do?</Text>
-            </Modal.Section>
-          </Modal>
-        </Form>
+        </BlockStack>
+        
+        {/* Navigation confirmation modal */}
+        <NavigationConfirmationModal
+          isOpen={showNavigationModal}
+          onConfirm={handleConfirmedNavigation}
+          onCancel={() => setShowNavigationModal(false)}
+        />
+        
+        {/* Success toast notification */}
+        <SuccessToast
+          isActive={showSuccessToast}
+          onDismiss={() => setShowSuccessToast(false)}
+          message="Settings saved successfully"
+        />
       </Page>
     </Frame>
   );

@@ -1,0 +1,1 @@
+import{r as u,S as f}from"./index-C_P7ACqV.js";function p({alt:r,sourceSet:e,source:t,crossOrigin:c,onLoad:a,className:n,...i}){const s=e?e.map(({source:o,descriptor:m})=>`${o} ${m}`).join(","):null,l=u.useCallback(()=>{a&&a()},[a]);return f.createElement("img",Object.assign({alt:r,src:t,crossOrigin:c,className:n,onLoad:l},s?{srcSet:s}:{},i))}export{p as I};

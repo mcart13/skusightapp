@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "3735a6407faff0009d87d5f7b41adbb7"
-application_url = "https://focal-kennedy-dialogue-electrical.trycloudflare.com"
+application_url = "https://confident-jungle-floating-slim.trycloudflare.com"
 embedded = true
 name = "skusight"
 handle = "skusight-1"
@@ -27,9 +27,9 @@ scopes = "write_products"
 
 [auth]
 redirect_urls = [
-  "https://focal-kennedy-dialogue-electrical.trycloudflare.com/auth/callback",
-  "https://focal-kennedy-dialogue-electrical.trycloudflare.com/auth/shopify/callback",
-  "https://focal-kennedy-dialogue-electrical.trycloudflare.com/api/auth/callback"
+  "https://confident-jungle-floating-slim.trycloudflare.com/auth/callback",
+  "https://confident-jungle-floating-slim.trycloudflare.com/auth/shopify/callback",
+  "https://confident-jungle-floating-slim.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

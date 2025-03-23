@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+The changes you make to anything need to be verified through documentation that you review before making the change. If you do not have the proper documentation, do not make any further implementations or changes, and ask me to get the specific documentation to you.

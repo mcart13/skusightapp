@@ -3,6 +3,7 @@ import {
   ApiVersion,
   AppDistribution,
   shopifyApp,
+  LATEST_API_VERSION,
 } from "@shopify/shopify-app-remix/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
@@ -16,6 +17,7 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  isEmbeddedApp: true,
   future: {
     unstable_newEmbeddedAuthStrategy: true,
     removeRest: true,
@@ -24,6 +26,15 @@ const shopify = shopifyApp({
     afterAuth: async (session) => {
       await syncInitialStoreData(session);
     },
+  },
+  // Set CORS headers to allow embedding in Shopify Admin
+  customMiddleware: (app) => {
+    app.use((req, res, next) => {
+      // Allow embedded app to run in Shopify Admin iframe
+      res.setHeader("Content-Security-Policy", "frame-ancestors 'self' https://*.shopify.com https://admin.shopify.com;");
+      res.setHeader("X-Frame-Options", "ALLOW-FROM https://admin.shopify.com");
+      next();
+    });
   },
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }

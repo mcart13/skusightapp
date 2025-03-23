@@ -1,0 +1,40 @@
+/* Common styles shared across components */
+
+.clickable {
+  cursor: pointer;
+}
+
+.textCenter {
+  text-align: center;
+}
+
+.textRight {
+  text-align: right;
+}
+
+.flexBetween {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.flexColumn {
+  display: flex;
+  flex-direction: column;
+}
+
+.gridLayout {
+  display: grid;
+  gap: 16px;
+}
+
+/* Spacing utilities */
+.mt1 { margin-top: 4px; }
+.mt2 { margin-top: 8px; }
+.mt3 { margin-top: 12px; }
+.mt4 { margin-top: 16px; }
+
+.mb1 { margin-bottom: 4px; }
+.mb2 { margin-bottom: 8px; }
+.mb3 { margin-bottom: 12px; }
+.mb4 { margin-bottom: 16px; } 

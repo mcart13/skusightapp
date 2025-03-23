@@ -10,8 +10,18 @@ import {
   DataTable,
   Button,
   Banner,
-  Badge
+  Badge,
+  InlineStack,
+  Box,
+  LegacyCard,
+  Divider,
+  SkeletonBodyText,
+  SkeletonDisplayText,
+  Tooltip,
+  Icon,
+  EmptyState
 } from "@shopify/polaris";
+import { AlertDiamondIcon } from "@shopify/polaris-icons";
 import { getSettings, applySettingsToCalculations, subscribeToSettingsChanges } from "../utils/settings";
 
 export const loader = async ({ request }) => {
@@ -138,6 +148,7 @@ export default function Index() {
   const { products, error } = useLoaderData();
   // Initialize with the latest settings and keep a reference to the settings object
   const [appSettings, setAppSettings] = useState(() => getSettings());
+  const [isLoading, setIsLoading] = useState(true);
   
   // Subscribe to settings changes with error handling
   useEffect(() => {
@@ -158,9 +169,15 @@ export default function Index() {
         }
       });
       
+      // Simulate loading state for better UX
+      const timer = setTimeout(() => {
+        setIsLoading(false);
+      }, 500);
+      
       // Cleanup function that will run when component unmounts
       return () => {
         isSubscribed = false;
+        clearTimeout(timer);
         try {
           unsubscribe();
         } catch (unsubscribeError) {
@@ -169,6 +186,7 @@ export default function Index() {
       };
     } catch (subscriptionError) {
       console.error("Error setting up settings subscription:", subscriptionError);
+      setIsLoading(false);
       // Return empty cleanup function if subscription failed
       return () => {};
     }
@@ -284,138 +302,167 @@ export default function Index() {
     }
   };
 
+  if (isLoading) {
+    return (
+      <Page title="SkuSight Inventory Predictions">
+        <BlockStack gap="400">
+          <SkeletonBodyText lines={3} />
+        </BlockStack>
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <SkeletonDisplayText size="small" />
+                <SkeletonBodyText lines={3} />
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
   return (
     <Page 
       title="SkuSight Inventory Predictions"
       primaryAction={
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <Link to="/app/notifications">
-            <Button>Notification Center</Button>
-          </Link>
+        <InlineStack gap="200" wrap={false} overflow="hidden">
           <Link to="/app/dashboard">
             <Button>Visual Dashboard</Button>
-          </Link>
-          <Link to="/app/sales-analysis">
-            <Button>View Sales Analysis</Button>
           </Link>
           <Link to="/app/order-automation">
             <Button primary>Automated Ordering</Button>
           </Link>
-          <Link to="/app/profit-recommendations">
-            <Button>Profit Maxing</Button>
-          </Link>
-          <Link to="/app/system-status">
-            <Button>System Status</Button>
-          </Link>
-          <Link to="/app/logsview">
-            <Button>Logs & Monitoring</Button>
-          </Link>
           <Link to="/app/settings">
             <Button>Settings</Button>
           </Link>
-        </div>
+        </InlineStack>
       }
+      secondaryActions={[
+        {
+          content: 'Notification Center',
+          accessibilityLabel: 'View notification center',
+          onAction: () => window.location.href = '/app/notifications'
+        },
+        {
+          content: 'System Status',
+          accessibilityLabel: 'View system status',
+          onAction: () => window.location.href = '/app/system-status'
+        }
+      ]}
     >
-      <div style={{ marginBottom: '16px' }}>
+      <BlockStack gap="400">
         {generateAlerts(rows).map((alert, index) => (
-          <div key={index} style={{ marginBottom: '12px' }}>
-            <Banner
-              title={alert.title}
-              status={alert.status}
-              onDismiss={() => {}}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <p style={{ marginRight: '12px' }}>{alert.message}</p>
-                <div>
-                  <Link to={alert.actionUrl}>
-                    <Button>{alert.actionText}</Button>
-                  </Link>
-                </div>
-              </div>
-            </Banner>
-          </div>
+          <Banner
+            key={index}
+            title={alert.title}
+            status={alert.status}
+            onDismiss={() => {}}
+          >
+            <InlineStack align="space-between" blockAlign="start">
+              <Box paddingInlineEnd="400">
+                <Text>{alert.message}</Text>
+              </Box>
+              <Link to={alert.actionUrl}>
+                <Button>{alert.actionText}</Button>
+              </Link>
+            </InlineStack>
+          </Banner>
         ))}
-      </div>
+      </BlockStack>
       
-      <Layout>
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">
-                Inventory Summary
-              </Text>
-              <BlockStack gap="200">
-                <Text>Total Products: {rows.length}</Text>
-                <Text>Products Needing Attention: {rows.filter(row => row[3] === "Order soon" || row[3] === "Order now").length}</Text>
-                <Text>Last Updated: {new Date().toLocaleString()}</Text>
-                <Text>
-                  Lead Time Setting: {appSettings.leadTime} days | Safety Stock: {appSettings.safetyStockDays} days
-                </Text>
-              </BlockStack>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-        
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="500">
-              <Text as="h2" variant="headingMd">
-                Current Inventory Status
-              </Text>
-              <DataTable
-                columnContentTypes={["text", "numeric", "numeric", "text", "text"]}
-                headings={["Product", "Current Stock", "Price", "Restock Recommendation", "SKU"]}
-                rows={rows}
-              />
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-        
-        {/* Added new Inventory Health Overview section with reorder buttons */}
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="500">
-              <Text as="h2" variant="headingMd">
-                Inventory Health Overview
-              </Text>
+      <BlockStack gap="500">
+        <Layout>
+          <Layout.Section>
+            <Card>
               <BlockStack gap="400">
-                {rows.map((row, index) => {
-                  let status = "success";
-                  let label = "Healthy";
-                  
-                  if (row[1] === 0) {
-                    status = "critical";
-                    label = "Out of Stock";
-                  } else if (row[3] === "Order now") {
-                    status = "critical";
-                    label = "Reorder Now";
-                  } else if (row[3] === "Order soon") {
-                    status = "warning";
-                    label = "Reorder Soon";
-                  } else if (row[3] === "Monitor closely") {
-                    status = "attention";
-                    label = "Monitor";
-                  }
-                  
-                  return (
-                    <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <Text variant="bodyMd">{row[0]}</Text>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Badge status={status}>{label}</Badge>
-                        {(status === "warning" || status === "critical") && (
-                          <Link to={`/app/order-automation`}>
-                            <Button size="slim">Reorder</Button>
-                          </Link>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                <Text as="h2" variant="headingMd">
+                  Inventory Summary
+                </Text>
+                <BlockStack gap="200">
+                  <Text>Total Products: {rows.length}</Text>
+                  <Text>Products Needing Attention: {rows.filter(row => row[3] === "Order soon" || row[3] === "Order now").length}</Text>
+                  <Text>Last Updated: {new Date().toLocaleString()}</Text>
+                  <Text>
+                    Lead Time Setting: {appSettings.leadTime} days | Safety Stock: {appSettings.safetyStockDays} days
+                  </Text>
+                </BlockStack>
               </BlockStack>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-      </Layout>
+            </Card>
+          </Layout.Section>
+          
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="500">
+                <Text as="h2" variant="headingMd">
+                  Current Inventory Status
+                </Text>
+                <DataTable
+                  columnContentTypes={["text", "numeric", "numeric", "text", "text"]}
+                  headings={["Product", "Current Stock", "Price", "Restock Recommendation", "SKU"]}
+                  rows={rows}
+                  hoverable
+                  verticalAlign="top"
+                  increasedTableDensity
+                  truncate
+                />
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+          
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="500">
+                <Text as="h2" variant="headingMd">
+                  Inventory Health Overview
+                </Text>
+                <BlockStack gap="400">
+                  {rows.map((row, index) => {
+                    let status = "success";
+                    let label = "Healthy";
+                    
+                    if (row[1] === 0) {
+                      status = "critical";
+                      label = "Out of Stock";
+                    } else if (row[3] === "Order now") {
+                      status = "critical";
+                      label = "Reorder Now";
+                    } else if (row[3] === "Order soon") {
+                      status = "warning";
+                      label = "Reorder Soon";
+                    } else if (row[3] === "Monitor closely") {
+                      status = "attention";
+                      label = "Monitor";
+                    }
+                    
+                    return (
+                      <>
+                        <InlineStack key={index} align="space-between" blockAlign="center">
+                          <InlineStack gap="100" blockAlign="center">
+                            {status === "critical" && <Icon source={AlertDiamondIcon} tone="critical" />}
+                            <Text variant="bodyMd">{row[0]}</Text>
+                          </InlineStack>
+                          <InlineStack gap="200" align="end">
+                            <Tooltip content={label}>
+                              <Badge status={status}>{label}</Badge>
+                            </Tooltip>
+                            {(status === "warning" || status === "critical") && (
+                              <Link to={`/app/order-automation`}>
+                                <Button size="slim">Reorder</Button>
+                              </Link>
+                            )}
+                          </InlineStack>
+                        </InlineStack>
+                        {index < rows.length - 1 && <Divider />}
+                      </>
+                    );
+                  })}
+                </BlockStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </BlockStack>
     </Page>
   );
 }

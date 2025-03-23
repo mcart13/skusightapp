@@ -1,0 +1,10 @@
+.clickableHeading {
+  cursor: pointer;
+  user-select: none;
+}
+
+.stockContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+} 

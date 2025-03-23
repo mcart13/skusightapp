@@ -1,0 +1,90 @@
+/* 
+  Shopify Embedded App Frame Performance Reset
+  This file helps prevent layout thrashing in Shopify embedded apps
+*/
+
+/* Use CSS containment where possible to isolate layout calculations */
+.Polaris-Card {
+  contain: content;
+}
+
+/* Use transform-based layout instead of properties that trigger layout */
+.Polaris-Card__Section {
+  transform: translateZ(0); /* Force GPU acceleration */
+}
+
+/* Override specific Polaris properties that cause layout thrashing */
+.Polaris-Stack {
+  contain: content;
+}
+
+.Polaris-Stack__Item {
+  contain: content;
+}
+
+/* Fix layout triggering properties */
+.Polaris-Badge {
+  transform: translateZ(0);
+}
+
+/* Fix for positioning issues */
+.Polaris-Frame {
+  transform: translateZ(0);
+}
+
+/* Use CSS variables for dimensions that might change */
+:root {
+  --polaris-card-height: auto;
+  --polaris-header-height: auto;
+}
+
+/* Override problematic properties with safer alternatives */
+/* 1. Height properties */
+[class*="Polaris"] {
+  height: var(--element-height, auto);
+  transform: translateZ(0);
+}
+
+/* 2. Position related properties that trigger layout in iframes */
+[style*="position:absolute"],
+[style*="position: absolute"],
+.Polaris-PositionedOverlay {
+  contain: layout;
+  will-change: transform;
+}
+
+/* 3. Margin properties - use padding instead where possible */
+.Polaris-LegacyCard {
+  padding-bottom: var(--spacing, 0);
+  padding-top: var(--spacing, 0);
+  contain: content;
+}
+
+/* 4. Width properties - use transform or fixed values */
+.Polaris-LegacyTabs {
+  contain: content;
+}
+
+/* 5. Transition properties - use transform and opacity */
+[class*="Polaris"][style*="transition"] {
+  transition-property: transform, opacity !important;
+}
+
+/* Cache properties for frequently accessed DOM elements */
+.cached-layout {
+  contain: strict;
+}
+
+/* Set reasonable containment for common layout patterns */
+.Polaris-Layout {
+  contain: content;
+}
+
+.Polaris-Layout__Section {
+  contain: content;
+}
+
+/* Prevent visibility layout thrashing */
+[style*="visibility"] {
+  contain: content;
+} 
